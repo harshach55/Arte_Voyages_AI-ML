@@ -1,0 +1,41 @@
+# Data: never commit datasets or customer text.
+# Only the empty folder placeholders are tracked.
+data/*
+!data/uc1_hotel/
+!data/uc2_inquiries/
+data/uc1_hotel/*
+data/uc2_inquiries/*
+!data/uc1_hotel/.gitkeep
+!data/uc2_inquiries/.gitkeep
+
+# Virtual environment
+.venv/
+venv/
+
+# Saved / trained models
+models/
+*.joblib
+*.pkl
+*.pickle
+*.crfsuite
+*.pt
+*.bin
+*.safetensors
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local settings and secrets
+.env
+.streamlit/secrets.toml
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
