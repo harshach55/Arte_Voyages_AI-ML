@@ -1,0 +1,13 @@
+# Versions as installed on 2026-10-27 (Python 3.12.4, Windows).
+# These record what was installed; they were not chosen in advance.
+# Full environment snapshot: requirements-lock.txt
+pandas==3.1.0
+numpy==2.5.4
+scikit-learn==1.9.1
+jupyterlab==4.6.4
+streamlit==1.66.1
+plotly==7.1.0
+matplotlib==3.11.2
+joblib==1.6.0
+pytest==9.1.1
+sklearn-crfsuite==0.5.0
