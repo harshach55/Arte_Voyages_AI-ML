@@ -169,3 +169,46 @@ def test_nothing_found_means_empty():
     r = parse_dates("We would love to see tigers.")
     assert r.dates.start is None and r.dates.duration is None
     assert r.evidence == [] and r.flags == []
+
+
+# --- regressions found on the first gold-set run ---------------------------------------
+
+
+def test_sentence_full_stop_is_not_part_of_slash_date():
+    r = parse_dates("We land in Colombo on 5/6/2027. Thanks")
+    assert r.dates.ambiguous[0].text == "5/6/2027"
+
+
+def test_german_trailing_dot_stays_with_dotted_date():
+    r = parse_dates("Abreise 02.01. Bitte")
+    assert r.dates.ambiguous[0].text == "02.01."
+
+
+def test_iso_date_followed_by_duration():
+    r = parse_dates("ab dem 2027-01-12 10 Nächte")
+    assert s(r.dates.start) == "2027-01-12"
+    assert r.dates.duration.to_str() == "10 nights"
+
+
+def test_duration_range_is_flagged_not_guessed():
+    r = parse_dates("maybe 7-8 nights??")
+    assert r.dates.duration is None
+    assert any("range" in f.message for f in r.flags)
+
+
+def test_whole_trip_length_wins_over_part_lengths():
+    r = parse_dates("a 9-night trip: Mumbai (2 nights) then Goa (7 nights)")
+    assert r.dates.duration.to_str() == "9 nights"
+    r = parse_dates("un voyage de 9 nuits : Mumbai (2 nuits) puis Goa (7 nuits)")
+    assert r.dates.duration.to_str() == "9 nights"
+
+
+def test_alternative_months_are_not_a_range():
+    r = parse_dates("Late October or early November, 10 nights.")
+    assert r.dates.start is None and r.dates.end is None
+    assert any("alternative" in f.message for f in r.flags)
+
+
+def test_mid_month_with_hyphen():
+    r = parse_dates("late January to mid-February")
+    assert (s(r.dates.start), s(r.dates.end)) == ("--01", "--02")

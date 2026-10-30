@@ -122,12 +122,12 @@ DESTINATIONS = {
 
 ACCOMMODATION = {
     "overwater villa": [r"over[- ]?water (?:villa|bungalow)s?", r"water villas?",
-                        r"(?:villa|bungalow)s? sur pilotis", r"wasservillas?",
+                        r"(?:villa|bungalow)s? sur pilotis", r"wasservill(?:as?|en)",
                         r"[üu]berwasser-?(?:villa|bungalow)s?"],
     "private pool": [r"private (?:plunge )?pool", r"(?:own|plunge) pool", r"piscine priv(?:ée|ative)",
                      r"privat(?:em|en|er)? ?pool", r"eigene[mn]? pool"],
     "villa": [r"villas?", r"villa priv[ée]e"],
-    "heritage or palace hotel": [r"palace hotels?", r"heritage (?:hotel|propert(?:y|ies)|havelis?)",
+    "heritage or palace hotel": [r"palace hotels?", r"heritage[- ](?:hotels?|propert(?:y|ies)|havelis?)",
                                  r"havelis?", r"h[ôo]tels?[- ]palais", r"palais", r"palasthotels?",
                                  r"maharaja palace"],
     "boutique hotel": [r"boutique[- ]?hotels?", r"h[ôo]tels? boutique"],
@@ -136,7 +136,7 @@ ACCOMMODATION = {
     "suite": [r"suites?"],
     "beachfront": [r"beach[- ]?front", r"on the beach", r"beach (?:resort|villa)s?", r"en bord de mer",
                    r"pieds dans l'eau", r"front de mer", r"direkt am (?:strand|meer)", r"am strand",
-                   r"strandnah"],
+                   r"strandnah", r"strand(?:resort|hotel|villa)s?"],
     "tented camp": [r"tented camps?", r"luxury tents?", r"glamping", r"camps? de tentes",
                     r"tentes? de luxe", r"zeltcamps?", r"luxuszelte?"],
     "connecting rooms": [r"(?:inter)?connecting rooms", r"chambres communicantes", r"verbindungszimmer",
@@ -161,9 +161,10 @@ FLIGHT_CLASSES = {
                            r"(?:we will|we'll) book (?:our own|the) flights",
                            r"no flights (?:needed|required)", r"without flights",
                            r"vols (?:sont )?d[ée]j[àa] r[ée]serv[ée]s", r"sans (?:les )?vols",
-                           r"nous r[ée]serv(?:ons|erons) (?:nos|les) vols",
+                           r"nous r[ée]serv(?:ons|erons) (?:nos|les) vols", r"pas besoin de vols",
+                           r"pas de vols [àa] pr[ée]voir",
                            r"fl[üu]ge (?:sind |haben wir )?(?:schon|bereits) gebucht", r"ohne fl[üu]ge",
-                           r"fl[üu]ge buchen wir selbst"],
+                           r"fl[üu]ge buchen wir selbst", r"fl[üu]ge brauchen wir nicht"],
 }
 
 FLIGHT_ORIGINS = {
@@ -175,7 +176,12 @@ FLIGHT_ORIGINS = {
     "Vienna": [r"vienna", r"vienne", r"wien"], "Brussels": [r"brussels", r"bruxelles", r"br[üu]ssel"],
     "Luxembourg": [r"luxembourg", r"luxemburg"], "Amsterdam": [r"amsterdam"], "New York": [r"new york"],
 }
-FLIGHT_WORDS = r"fl(?:y|ying|ights?)|vols?|avion|fl[üu]ge?|fliegen"
+# words that make a sentence about flying (cabin classes count too)
+FLIGHT_WORDS = (
+    r"fl(?:y|ying|ights?)|vols?|avion|fl[üu]ge?|fliegen|departures?|abflug|"
+    r"(?:business|first|economy)[- ]?(?:class|klasse)|classe affaires|premi[èe]re classe"
+)
+ORIGIN_JOINERS = r",|and|or|et|ou|und|oder"
 ORIGIN_PREPOSITIONS = r"from|out of|depuis|au d[ée]part de|de|d'|ab|von|aus"
 
 INTERESTS = {
@@ -194,9 +200,10 @@ INTERESTS = {
     "food and cooking": [r"food", r"cuisine", r"cooking class(?:es)?", r"culinary", r"street food",
                          r"gastronomi(?:e|que)", r"cours de cuisine", r"kochkurs(?:e)?",
                          r"kulinarisch(?:e[nr]?)?"],
-    "trekking and hiking": [r"trek(?:s|king)?", r"hik(?:e|es|ing)", r"randonn[ée]es?", r"wandern",
-                            r"wanderungen", r"bergwandern"],
-    "photography": [r"photography", r"photographie", r"fotografie", r"fotografieren"],
+    "trekking and hiking": [r"trek(?:s|king(?:reise|tour)?(?:n|en)?)?", r"hik(?:e|es|ing)", r"randonn[ée]es?",
+                            r"wandern", r"wanderungen", r"bergwandern"],
+    "photography": [r"photography", r"photographie", r"fotografie", r"fotografieren", r"fotoreisen?",
+                    r"hobbyfotograf(?:en|in)?"],
     "diving and snorkelling": [r"diving", r"snorkel(?:l)?ing", r"plong[ée]e", r"tauchen", r"schnorcheln"],
     "shopping": [r"shopping", r"markets?", r"march[ée]s", r"artisanat", r"m[äa]rkte", r"einkaufen"],
     "golf": [r"golf"],
@@ -209,7 +216,8 @@ INTERESTS = {
 }
 
 DIETARY = {
-    "vegetarian": [r"vegetarians?", r"v[ée]g[ée]tarien(?:ne)?s?", r"vegetarisch(?:e[nrs]?)?", r"veggie"],
+    "vegetarian": [r"vegetarians?", r"v[ée]g[ée]tarien(?:ne)?s?", r"vegetarisch(?:e[nrs]?)?", r"veggie",
+                   r"vegetarier(?:in|innen)?"],
     "vegan": [r"vegan(?:e|s|er)?", r"v[ée]gan(?:e|s)?", r"v[ée]g[ée]talien(?:ne)?s?"],
     "gluten-free": [r"gluten[- ]free", r"c(?:o)?eliac", r"sans gluten", r"glutenfrei(?:e[nr]?)?",
                     r"z[öo]liakie", r"c(?:œ|oe)liaque"],
@@ -234,9 +242,13 @@ OCCASIONS = {
                     r"noces d'(?:or|argent|perle|rubis|diamant)", r"hochzeitstag", r"jahrestag",
                     r"silberhochzeit", r"goldene[nr]? hochzeit"],
     "birthday": [r"birthday", r"anniversaire", r"(?:f[êe]te[rs]?|c[ée]l[ée]brer) (?:ses|mes|son) \d+ ans",
-                 r"geburtstag"],
-    "retirement": [r"retirement", r"retiring", r"retraite", r"ruhestand", r"pensionierung"],
-    "proposal": [r"proposal", r"propose to", r"demande en mariage", r"heiratsantrag"],
+                 r"geburtstag", r"turns? \d{2}", r"wird \d{2}(?!\s*(?:jahre alt|personen|n[äa]chte|tage))"],
+    # "im Ruhestand" (being retired) is not an occasion, so only the event counts
+    "retirement": [r"retirement", r"retiring", r"(?:d[ée]part [àa] la |ma |sa |notre )retraite",
+                   r"pensionierung", r"(?:eintritt )?in den ruhestand"],
+    # a bare "proposal" is usually a request for a quote
+    "proposal": [r"marriage proposal", r"propos(?:e|ing) to", r"demande en mariage",
+                 r"demander (?:\w+ ){0,3}en mariage", r"heiratsantrag"],
     "graduation": [r"graduation", r"remise de dipl[ôo]me", r"abschlussfeier"],
     "family reunion": [r"family reunion", r"r[ée]union de famille", r"familientreffen"],
     "babymoon": [r"babymoon"],
@@ -256,7 +268,8 @@ SPECIAL_REQUESTS = {
                        r"privatfahrer", r"private[nr]? fahrer", r"eigene[nr]? fahrer", r"mit fahrer"],
     "accessibility needs": [r"wheelchair(?: accessible| access)?", r"(?:reduced|limited) mobility",
                             r"fauteuil roulant", r"mobilit[ée] r[ée]duite", r"rollstuhl(?:gerecht)?",
-                            r"gehbehindert", r"eingeschr[äa]nkte[nr]? mobilit[äa]t", r"barrierefrei"],
+                            r"gehbehindert", r"eingeschr[äa]nkte[nr]? mobilit[äa]t",
+                            r"barrierefrei(?:heit|e[nrs]?)?"],
     "airport transfers": [r"airport transfers?", r"transferts? (?:depuis l'|de l'|à l')?a[ée]roport",
                           r"flughafentransfers?"],
     "childcare": [r"babysitt(?:er|ing)", r"baby-sitt(?:er|ing)", r"nanny", r"garde d'enfants",
@@ -266,7 +279,8 @@ SPECIAL_REQUESTS = {
     "surprise arrangement": [r"surprise", r"[üu]berraschung"],
     "helicopter": [r"helicopter", r"h[ée]licopt[èe]re", r"hubschrauber", r"helikopter"],
     "baby cot": [r"(?:baby )?cot", r"crib", r"lit (?:de )?b[ée]b[ée]", r"babybett", r"kinderbett"],
-    "short drives only": [r"no long drives", r"pas de longs trajets", r"keine langen (?:auto)?fahrten"],
+    "short drives only": [r"no long drives", r"avoid long drives", r"pas de longs trajets",
+                          r"[ée]viter les longs trajets", r"keine langen (?:auto)?fahrten"],
 }
 
 # Currency words. A bare "$" or "dollars" could be another dollar, so it is

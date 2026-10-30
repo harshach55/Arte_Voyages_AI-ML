@@ -214,3 +214,96 @@ def test_budget_without_currency_is_kept_and_flagged():
 def test_numbers_without_currency_or_budget_word_are_ignored():
     b, ev, _ = extract_budget("children aged 8 and 11, 14 nights")
     assert b.amount_min is None and ev == []
+
+
+# --- regressions found on the first gold-set run ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, party",
+    [
+        ("wir sind eine vierköpfige Familie", 4),
+        ("nous sommes un couple de retraités", 2),
+        ("wir sind ein Ehepaar aus Genf", 2),
+        ("Nous sommes une famille de Mumbai (2 adultes, 1 adolescent de 15 ans)", 3),
+        ("We are three friends", 3),
+        ("Wir wären zu dritt.", 3),
+        ("on est 2 potes", 2),
+        ("Was kostet eine Woche Goa für zwei im Dezember?", 2),
+    ],
+)
+def test_articles_are_not_counted_as_one_traveller(text, party):
+    t, _, _ = extract_travellers(text)
+    assert t.party_size == party
+
+
+def test_baby_cot_is_not_a_second_baby():
+    t, _, _ = extract_travellers("my partner and I with our baby (10 months); a baby cot please")
+    assert (t.party_size, t.children, t.ages) == (3, 1, [0])
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("2 adults + 3 kids (4, 7, 11)", [4, 7, 11]),
+        ("2 Kinder: 6 und 9", [6, 9]),
+        ("1 teenager of 15", [15]),
+        ("I'm a solo traveller (62)", [62]),
+        ("ich (34) reise allein", [34]),
+        ("1 Teenager mit 15 Jahren", [15]),
+        ("we're both 28", [28, 28]),
+    ],
+)
+def test_more_age_patterns(text, ages):
+    t, _, _ = extract_travellers(text)
+    assert t.ages == ages
+
+
+@pytest.mark.parametrize(
+    "text, lo, hi",
+    [
+        ("Budget around INR 4,00,000.", 400000, 400000),
+        ("Budget entre 20 et 25 000 €.", 20000, 25000),
+        ("Budget bis 45.000 Euro", None, 45000),
+        ("budget like 5k usd max", None, 5000),
+        ("Budget max. 2.500 €", None, 2500),
+    ],
+)
+def test_budget_regressions(text, lo, hi):
+    b, _, _ = extract_budget(text)
+    assert (b.amount_min, b.amount_max) == (lo, hi)
+
+
+def test_home_city_is_not_a_destination():
+    p = extract_profile("We are a family from Mumbai wanting to visit Ladakh.")
+    assert p.destination == ["Ladakh"]
+    p = extract_profile("We fly into Delhi and travel from Delhi to Agra.")
+    assert p.destination == ["Delhi", "Agra"]
+
+
+def test_german_genitive_destination():
+    assert extract_profile("das kulturelle Dreieck Sri Lankas").destination == ["Sri Lanka"]
+
+
+def test_departure_cities_joined_with_and():
+    labels, _ = extract_flights("Departures from London and Frankfurt, flights in economy class.")
+    assert labels == ["economy class", "departure from London", "departure from Frankfurt"]
+
+
+def test_cabin_class_makes_a_flight_sentence():
+    labels, _ = extract_flights("Business Class ab Manchester, wenn möglich.")
+    assert "departure from Manchester" in labels
+
+
+def test_request_for_a_proposal_is_not_a_marriage_proposal():
+    assert extract_profile("I would like to request a proposal for South India.").occasion == []
+
+
+def test_french_anniversaire_in_wedding_context_is_not_a_birthday():
+    p = extract_profile("nos 40 ans de mariage, et une attention pour la soirée d'anniversaire")
+    assert p.occasion == ["anniversary"]
+
+
+def test_beachfront_hotel_is_not_a_beach_interest():
+    p = extract_profile("Eine Villa direkt am Strand mit Babybett.")
+    assert p.accommodation == ["villa", "beachfront"] and p.interests == []

@@ -54,7 +54,16 @@ PATTERNS = [
     (
         "numeric",
         re.compile(
-            r"(?<![\d.,/])(?P<a>\d{1,2})[./](?P<b>\d{1,2})(?:[./](?P<y>\d{4}|\d{2}))?\.?"
+            r"(?<![\d.,/])(?P<a>\d{1,2})/(?P<b>\d{1,2})(?:/(?P<y>\d{4}|\d{2}))?"
+            r"(?![\d/])(?!\s*-?\s*(?:stars?|star|étoiles?|sterne|%|k\b))" + _NOT_COUNT,
+            _I,
+        ),
+    ),
+    (
+        # German style 15.03. or 15.03.2027 (a trailing dot belongs to the date)
+        "numeric",
+        re.compile(
+            r"(?<![\d.,/])(?P<a>\d{1,2})\.(?P<b>\d{1,2})(?:\.(?P<y>\d{4}|\d{2})|\.)?"
             r"(?![\d/])(?!\s*-?\s*(?:stars?|star|étoiles?|sterne|%|k\b))" + _NOT_COUNT,
             _I,
         ),
@@ -63,7 +72,7 @@ PATTERNS = [
         "month_only",
         re.compile(
             r"(?:\b(?:in|during|early|late|mid|end of|beginning of|start of|en|au mois de|"
-            r"début|fin|courant|im|anfang|ende|mitte)\s+|\bmi-)" + _month("m") + _YEAR,
+            r"début|fin|courant|im|anfang|ende|mitte)\s+|\bmid?-)" + _month("m") + _YEAR,
             _I,
         ),
     ),
@@ -94,8 +103,16 @@ DURATION_DE_RE = re.compile(
 )
 FORTNIGHT_RE = re.compile(r"(?<!\w)(?:a\s+)?fortnight(?!\w)", _I)
 # "twice a day", "$500 a night": a rate or frequency, not a trip length
-_NOT_TRIP_LENGTH = re.compile(r"(?:\b(?:once|twice|per|times|every|each|par|pro|mal)|[\d$€£])\s*$", _I)
+_NOT_TRIP_LENGTH = re.compile(r"\b(?:once|twice|per|times|every|each|par|pro|mal)\s*$", _I)
+_RATE_BEFORE = re.compile(r"[\d$€£]\s*$")
+# "7-8 nights", "10 or 12 days": a range, so no single trip length
+_RANGE_BEFORE = re.compile(r"\d\s*(?:-|–|to|or|à|ou|bis|oder)\s*$", _I)
 _TOTAL_HINT = re.compile(r"\b(?:total|in all|insgesamt|au total|en tout|gesamt)\b", _I)
+# "9-night trip", "voyage de 9 nuits", "Reise mit 9 Nächten": length of the whole trip
+_TRIP_AFTER = re.compile(r"^\s*(?:trip|tour|journey|holiday|vacation|itinerary)\b", _I)
+_TRIP_BEFORE = re.compile(
+    r"\b(?:voyage|s[ée]jour|circuit|reise|rundreise|urlaub)\s+(?:de|d'|mit|von)\s*(?:environ\s+|etwa\s+)?$", _I
+)
 
 
 @dataclass
@@ -187,12 +204,20 @@ def _find_mentions(text: str) -> list[_Mention]:
     return sorted(mentions, key=lambda x: x.start)
 
 
-def _find_durations(text: str) -> list[tuple[Duration, re.Match]]:
+def _find_durations(text: str) -> tuple[list[tuple[Duration, re.Match]], list[re.Match]]:
+    """Return (durations, ranges). Ranges such as '7-8 nights' are kept apart."""
     found = []
+    ranges = []
     for m in DURATION_RE.finditer(text):
-        if _NOT_TRIP_LENGTH.search(text[max(0, m.start() - 8):m.start()]):
+        before = text[max(0, m.start() - 8):m.start()]
+        if _NOT_TRIP_LENGTH.search(before):
             continue
         n = m.group("n").lower()
+        if n in ("a", "an") and _RATE_BEFORE.search(before):
+            continue
+        if _RANGE_BEFORE.search(before):
+            ranges.append(m)
+            continue
         value = int(n) if n.isdigit() else _DUR_NUMBERS[n]
         found.append((Duration(value=value, unit=UNITS[m.group("u").lower()]), m))
     for m in DURATION_DE_RE.finditer(text):
@@ -202,7 +227,14 @@ def _find_durations(text: str) -> list[tuple[Duration, re.Match]]:
         found.append((Duration(value=value, unit=unit), m))
     for m in FORTNIGHT_RE.finditer(text):
         found.append((Duration(value=2, unit="weeks"), m))
-    return sorted(found, key=lambda x: x[1].start())
+    return sorted(found, key=lambda x: x[1].start()), ranges
+
+
+def _is_whole_trip(text: str, m: re.Match) -> bool:
+    if _TOTAL_HINT.search(text[max(0, m.start() - 20):m.end() + 20]):
+        return True
+    return bool(_TRIP_AFTER.search(text[m.end():m.end() + 15])
+                or _TRIP_BEFORE.search(text[max(0, m.start() - 25):m.start()]))
 
 
 def _evidence(m_start: int, m_end: int, text: str) -> Evidence:
@@ -228,6 +260,11 @@ def parse_dates(text: str) -> DateResult:
         used = days[:2]
     elif months:
         used = months[:2]
+    if len(used) == 2 and re.fullmatch(r"\s*(?:or|ou|oder)\s*", text[used[0].end:used[1].start], _I):
+        # "late October or early November": a choice, not a range
+        flags.append(Flag(field="dates", kind="ambiguous",
+                          message=f"alternative dates: '{text[used[0].start:used[1].end]}'"))
+        used = []
     if not ranges and used:
         start = used[0].first
         end = used[1].first if len(used) > 1 else None
@@ -244,16 +281,17 @@ def parse_dates(text: str) -> DateResult:
 
     # duration
     duration = None
-    durations = _find_durations(text)
+    durations, duration_ranges = _find_durations(text)
+    for rm in duration_ranges:
+        start_of_range = max(0, rm.start() - 8)
+        flags.append(Flag(field="dates", kind="ambiguous",
+                          message=f"trip length given as a range: '{text[start_of_range:rm.end()].strip()}'"))
     distinct = {(d.value, d.unit) for d, _ in durations}
     if len(distinct) == 1:
         duration, dm = durations[0]
         evidence.append(_evidence(dm.start(), dm.end(), text))
     elif len(distinct) > 1:
-        totals = [
-            (d, dm) for d, dm in durations
-            if _TOTAL_HINT.search(text[max(0, dm.start() - 20):dm.end() + 20])
-        ]
+        totals = [(d, dm) for d, dm in durations if _is_whole_trip(text, dm)]
         if len({(d.value, d.unit) for d, _ in totals}) == 1:
             duration, dm = totals[0]
             evidence.append(_evidence(dm.start(), dm.end(), text))
