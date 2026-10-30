@@ -1,0 +1,30 @@
+# Budget bands for the travel enquiry profile.
+#
+# PLACEHOLDER VALUES. These band edges have not been agreed with the
+# business yet. Change them here; no code change is needed.
+#
+# Amounts are per trip, in USD. Currencies are never converted, so a band
+# is only assigned when the enquiry budget is in USD and not per person.
+# min is inclusive, max is exclusive.
+
+currency = "USD"
+basis = "per_trip"
+placeholder = true
+
+[[band]]
+label = "under_10k"
+max = 10000
+
+[[band]]
+label = "10k_to_25k"
+min = 10000
+max = 25000
+
+[[band]]
+label = "25k_to_50k"
+min = 25000
+max = 50000
+
+[[band]]
+label = "over_50k"
+min = 50000
