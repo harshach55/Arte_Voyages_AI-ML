@@ -648,7 +648,24 @@ def _missing_flags(p: ClientProfile) -> list[Flag]:
     return flags
 
 
-def extract_profile(text: str) -> ClientProfile:
+def extract_profile(text: str, model=False, threshold: Optional[float] = None) -> ClientProfile:
+    """Extract a client profile. Rules only by default.
+
+    model=True adds the optional embedding layer (see semantic.py) for label
+    fields the rules left empty; a callable can be passed instead to use a
+    different embedder (used in tests). threshold overrides the default
+    similarity cut-off of the model layer.
+    """
+    profile = _rules_profile(text)
+    if model:
+        from .semantic import DEFAULT_THRESHOLD, add_model_values
+
+        embed = model if callable(model) else None
+        add_model_values(profile, text, embed, DEFAULT_THRESHOLD if threshold is None else threshold)
+    return profile
+
+
+def _rules_profile(text: str) -> ClientProfile:
     evidence: list[Evidence] = []
     flags: list[Flag] = []
 
