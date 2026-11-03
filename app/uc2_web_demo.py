@@ -24,12 +24,21 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.uc2_extractor import lexicon as lx  # noqa: E402
+from src.uc2_extractor.corrections import (  # noqa: E402
+    CORRECTIONS_FILE,
+    CorrectionError,
+    count_corrections,
+    save_correction,
+)
 from src.uc2_extractor.extract import extract_profile  # noqa: E402
-from src.uc2_extractor.schema import ClientProfile, PartialDate  # noqa: E402
+from src.uc2_extractor.metrics import ALL_FIELDS, profile_to_values  # noqa: E402
+from src.uc2_extractor.schema import ClientProfile, PartialDate, load_band_config  # noqa: E402
 
 GOLD_FILE = ROOT / "data" / "uc2_inquiries" / "gold" / "enquiries.csv"
 GOLD_SAMPLE_ID = "P02-en"  # honeymoon enquiry with a GBP budget and an ambiguous date
@@ -64,6 +73,35 @@ SCORES = {
     },
     "next": "The next real number will come from a second held-out set written by colleagues, scored once at the end.",
 }
+
+# Field list and allowed values for the review-and-correct form.
+CORRECTION_FIELDS = [
+    {"name": "language", "label": "Language", "kind": "select", "options": ["", "en", "fr", "de"]},
+    {"name": "destination", "label": "Destination", "kind": "list",
+     "options": sorted(lx.DESTINATIONS), "free": True},
+    {"name": "start_date", "label": "Start date", "kind": "text", "hint": "2027-03-04, --03-04 or --03"},
+    {"name": "end_date", "label": "End date", "kind": "text", "hint": "2027-03-18, --03-18 or --03"},
+    {"name": "duration", "label": "Trip length", "kind": "text", "hint": "10 nights, 12 days or 2 weeks"},
+    {"name": "dates_ambiguous", "label": "Unclear dates", "kind": "list", "options": [], "remove_only": True},
+    {"name": "party_size", "label": "Party size", "kind": "text", "hint": "number"},
+    {"name": "adults", "label": "Adults", "kind": "text", "hint": "number"},
+    {"name": "children", "label": "Children", "kind": "text", "hint": "number"},
+    {"name": "ages", "label": "Ages", "kind": "list", "options": [], "free": True, "hint": "one age per value"},
+    {"name": "budget_min", "label": "Budget from", "kind": "text", "hint": "number"},
+    {"name": "budget_max", "label": "Budget up to", "kind": "text", "hint": "number"},
+    {"name": "currency", "label": "Currency", "kind": "text", "hint": "USD, EUR, GBP, INR, CHF"},
+    {"name": "budget_basis", "label": "Budget basis", "kind": "select", "options": ["", "per_trip", "per_person"]},
+    {"name": "budget_band", "label": "Budget band", "kind": "select",
+     "options": [""] + [b.label for b in load_band_config().band]},
+    {"name": "accommodation", "label": "Accommodation", "kind": "list", "options": sorted(lx.ACCOMMODATION)},
+    {"name": "flights", "label": "Flights", "kind": "list", "free": True,
+     "options": sorted(lx.FLIGHT_CLASSES) + [f"departure from {c}" for c in sorted(lx.FLIGHT_ORIGINS)]},
+    {"name": "interests", "label": "Interests", "kind": "list", "options": sorted(lx.INTERESTS)},
+    {"name": "dietary", "label": "Dietary", "kind": "list", "options": sorted(lx.DIETARY)},
+    {"name": "occasion", "label": "Occasion", "kind": "list", "options": sorted(lx.OCCASIONS)},
+    {"name": "special_requests", "label": "Special requests", "kind": "list", "options": sorted(lx.SPECIAL_REQUESTS)},
+]
+assert [f["name"] for f in CORRECTION_FIELDS] == list(ALL_FIELDS)
 
 LANGUAGE_NAMES = {"en": "English", "fr": "French", "de": "German"}
 ROWS = [
@@ -208,7 +246,28 @@ def build_rows(p: ClientProfile) -> list[dict]:
 def build_response(text: str, use_model: bool) -> dict:
     profile = extract_profile(text, model=use_model)
     flags = [{"field": f.field.replace("_", " "), "kind": f.kind, "message": f.message} for f in profile.flags]
-    return {"rows": build_rows(profile), "flags": flags, "profile": profile.model_dump(mode="json")}
+    return {"rows": build_rows(profile), "flags": flags, "profile": profile.model_dump(mode="json"),
+            "values": profile_to_values(profile)}
+
+
+def handle_save(data: Optional[dict], model_available: bool, path: Path = CORRECTIONS_FILE) -> tuple[int, dict]:
+    """Save one correction. The extracted profile is recomputed from the text on
+    the server, so the saved 'extracted' part cannot be altered in the browser."""
+    if not isinstance(data, dict):
+        return 400, {"error": "request must be JSON with 'text', 'mode' and 'corrected'"}
+    text = str(data.get("text", "")).strip()
+    corrected = data.get("corrected")
+    if not text or len(text) > MAX_CHARS:
+        return 400, {"error": "enquiry is empty or too long"}
+    if not isinstance(corrected, dict) or not all(isinstance(v, str) for v in corrected.values()):
+        return 400, {"error": "'corrected' must map field names to text values"}
+    use_model = data.get("mode") == "model" and model_available
+    extracted = extract_profile(text, model=use_model)
+    try:
+        count = save_correction(text, extracted, corrected, path)
+    except CorrectionError as exc:
+        return 400, {"error": f"Not saved: {exc}"}
+    return 200, {"count": count}
 
 
 def build_batch(texts: list[str], use_model: bool) -> list[dict]:
@@ -292,12 +351,28 @@ PAGE = """<!doctype html>
   .scores .real th { background: #dff0d8; }
   .scores .opt th { background: #f7e7c6; }
   .small { font-size: 17px; color: #555; }
+  .privacy { padding: 12px 16px; border-radius: 6px; background: #fde8e8; border: 2px solid #c0392b;
+             color: #6b1a12; font-weight: bold; }
+  .review { margin-top: 26px; padding: 16px 18px; border: 2px solid #1f4e8c; border-radius: 6px; }
+  .review h3 { margin: 0 0 6px; font-size: 22px; }
+  .review table td { vertical-align: middle; }
+  .review input[type=text], .review select { font-size: 18px; padding: 6px 8px; border: 1px solid #888;
+             border-radius: 4px; min-width: 260px; }
+  .chip { display: inline-block; margin: 2px 6px 2px 0; padding: 3px 4px 3px 10px; background: #eef1f5;
+          border: 1px solid #9aa7b8; border-radius: 14px; }
+  .chip button { font-size: 15px; padding: 0 7px; margin-left: 4px; border-radius: 10px; border-width: 1px; }
+  .addbox { display: inline-flex; gap: 6px; margin-top: 4px; }
+  .addbox button { font-size: 16px; padding: 4px 10px; }
+  .hint { font-size: 15px; color: #666; }
+  .saved { font-weight: bold; color: #1d6b2c; }
   footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #ccc; color: #555; font-size: 17px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Travel Enquiry Extractor (English, French, German)</h1>
+  <p class="privacy">Do not paste real client enquiries into this demo until the team agrees how to store them.
+    Saved corrections are written to a file on this computer (data/uc2_inquiries/corrections/).</p>
   <p id="model-status" class="notice"></p>
 
   <div class="controls">
@@ -328,7 +403,20 @@ PAGE = """<!doctype html>
     </div>
     <p><button id="toggle-json">Show raw JSON</button></p>
     <pre id="json" hidden></pre>
+
+    <div class="review">
+      <h3>Review and correct</h3>
+      <p class="small">Edit a value, remove a wrong one with &#x2715;, or add a missing one, then save.
+        Lists can take several values.</p>
+      <table><tbody id="review-rows"></tbody></table>
+      <p>
+        <button class="primary" id="save-corrections">Save corrections</button>
+        <button id="reset-corrections">Undo my changes</button>
+        <span id="save-status"></span>
+      </p>
+    </div>
   </div>
+  <p class="small">Saved corrections: <strong id="correction-count">0</strong></p>
 
   <div id="batch" hidden>
     <table>
@@ -350,6 +438,10 @@ PAGE = """<!doctype html>
 const SAMPLES = __SAMPLES__;
 const SCORES = __SCORES__;
 const MODEL = __MODEL__;
+const FIELDS = __FIELDS__;
+let lastRequest = null;      // {text, mode} of the enquiry shown in the review form
+let originalValues = null;   // values as extracted
+let reviewValues = null;     // values being edited
 const box = document.getElementById("enquiry");
 const statusLine = document.getElementById("status");
 
@@ -449,9 +541,131 @@ function showSingle(data) {
     list.appendChild(li);
   }
   document.getElementById("json").textContent = JSON.stringify(data.profile, null, 2);
+  originalValues = data.values;
+  reviewValues = Object.assign({}, data.values);
+  document.getElementById("save-status").textContent = "";
+  renderReview();
   document.getElementById("batch").hidden = true;
   document.getElementById("single").hidden = false;
 }
+
+// ----- review and correct -----
+function splitList(v) { return (v || "").split("|").map(x => x.trim()).filter(x => x); }
+
+function renderReview() {
+  const tbody = document.getElementById("review-rows");
+  tbody.replaceChildren();
+  for (const f of FIELDS) {
+    const tr = el("tr");
+    tr.appendChild(el("td", f.label, "field"));
+    const td = el("td");
+    if (f.kind === "select") {
+      const sel = el("select");
+      const current = reviewValues[f.name] || "";
+      const options = f.options.includes(current) ? f.options : f.options.concat([current]);
+      for (const o of options) {
+        const opt = el("option", o === "" ? "\\u2014 (empty)" : o);
+        opt.value = o;
+        if (o === current) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change", () => { reviewValues[f.name] = sel.value; });
+      sel.setAttribute("aria-label", f.label);
+      td.appendChild(sel);
+    } else if (f.kind === "text") {
+      const input = el("input");
+      input.type = "text";
+      input.value = reviewValues[f.name] || "";
+      input.placeholder = f.hint || "";
+      input.setAttribute("aria-label", f.label);
+      input.addEventListener("input", () => { reviewValues[f.name] = input.value.trim(); });
+      td.appendChild(input);
+    } else {
+      const items = splitList(reviewValues[f.name]);
+      if (!items.length) td.appendChild(el("span", "\\u2014 ", "empty"));
+      items.forEach((item, i) => {
+        const chip = el("span", null, "chip");
+        chip.appendChild(document.createTextNode(item));
+        const x = el("button", "\\u2715");
+        x.title = "Remove " + item;
+        x.setAttribute("aria-label", "Remove " + item);
+        x.addEventListener("click", () => {
+          items.splice(i, 1);
+          reviewValues[f.name] = items.join(" | ");
+          renderReview();
+        });
+        chip.appendChild(x);
+        td.appendChild(chip);
+      });
+      if (!f.remove_only) {
+        const wrap = el("span", null, "addbox");
+        const input = el("input");
+        input.type = "text";
+        input.placeholder = f.hint || (f.free ? "type or pick a value" : "pick a value");
+        input.setAttribute("aria-label", "Add " + f.label);
+        if (f.options.length) {
+          const list = el("datalist");
+          list.id = "opts-" + f.name;
+          for (const o of f.options) { const opt = el("option"); opt.value = o; list.appendChild(opt); }
+          wrap.appendChild(list);
+          input.setAttribute("list", list.id);
+        }
+        const add = el("button", "Add");
+        const doAdd = () => {
+          const v = input.value.trim().replace(/\\|/g, " ");
+          if (!v) return;
+          if (!f.free && f.options.length && !f.options.includes(v)) {
+            document.getElementById("save-status").textContent = "'" + v + "' is not one of the " + f.label.toLowerCase() + " labels.";
+            return;
+          }
+          if (!items.includes(v)) items.push(v);
+          reviewValues[f.name] = items.join(" | ");
+          renderReview();
+        };
+        add.addEventListener("click", doAdd);
+        input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } });
+        wrap.appendChild(input);
+        wrap.appendChild(add);
+        td.appendChild(wrap);
+      }
+      if (f.remove_only) td.appendChild(el("span", " (can only be removed)", "hint"));
+    }
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
+async function refreshCount() {
+  try {
+    const res = await fetch("/corrections_count");
+    document.getElementById("correction-count").textContent = String((await res.json()).count);
+  } catch (err) { /* the counter is only informative */ }
+}
+
+async function saveCorrections() {
+  const out = document.getElementById("save-status");
+  if (!lastRequest || !reviewValues) { out.textContent = "Extract an enquiry first."; return; }
+  out.className = "";
+  out.textContent = "Saving\\u2026";
+  try {
+    const data = await post("/save_correction", {text: lastRequest.text, mode: lastRequest.mode, corrected: reviewValues});
+    document.getElementById("correction-count").textContent = String(data.count);
+    out.textContent = "Saved.";
+    out.className = "saved";
+  } catch (err) {
+    out.textContent = err.message;
+    out.className = "error";
+  }
+}
+
+document.getElementById("save-corrections").addEventListener("click", saveCorrections);
+document.getElementById("reset-corrections").addEventListener("click", () => {
+  if (!originalValues) return;
+  reviewValues = Object.assign({}, originalValues);
+  document.getElementById("save-status").textContent = "";
+  renderReview();
+});
+refreshCount();
 
 function cell(text) { return text ? el("td", text) : el("td", "\\u2014", "empty"); }
 
@@ -495,7 +709,9 @@ async function extract() {
       const texts = text.split(/\\r?\\n/).map(t => t.trim()).filter(t => t);
       showBatch((await post("/extract_batch", {texts, model: useModel})).rows);
     } else {
-      showSingle(await post("/extract", {text, model: useModel}));
+      const data = await post("/extract", {text, model: useModel});
+      lastRequest = {text, mode: useModel ? "model" : "rules"};
+      showSingle(data);
     }
     statusLine.textContent = "Mode used: " + (useModel ? "rules + model" : "rules only");
   } catch (err) {
@@ -525,12 +741,14 @@ def render_page(samples: list[dict], model_available: bool, model_message: str) 
     page = PAGE.replace("__SAMPLES__", _script_json(samples))
     page = page.replace("__SCORES__", _script_json(SCORES))
     page = page.replace("__MODEL__", _script_json({"available": model_available, "message": model_message}))
+    page = page.replace("__FIELDS__", _script_json(CORRECTION_FIELDS))
     return page.encode("utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
     page: bytes = b""
     model_available: bool = False
+    corrections_path: Path = CORRECTIONS_FILE
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -559,6 +777,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path in ("/", "/index.html"):
             self._send(200, self.page, "text/html; charset=utf-8")
+        elif self.path == "/corrections_count":
+            self._json(200, {"count": count_corrections(self.corrections_path)})
         else:
             self._json(404, {"error": "not found"})
 
@@ -583,6 +803,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             use_model = bool(data.get("model")) and self.model_available
             self._json(200, {"rows": build_batch(texts, use_model)})
+        elif self.path == "/save_correction":
+            status, body = handle_save(self._read_json(MAX_CHARS * 8), self.model_available, self.corrections_path)
+            self._json(status, body)
         else:
             self._json(404, {"error": "not found"})
 
@@ -594,6 +817,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Browser demo for the travel enquiry extractor.")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-model", action="store_true", help="do not load the model (rules only)")
+    parser.add_argument("--corrections", type=Path, default=CORRECTIONS_FILE,
+                        help="file where corrections are saved (default: data/uc2_inquiries/corrections/)")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -604,6 +829,7 @@ def main(argv=None) -> int:
         model_available, model_message = check_model()
     gold = load_gold_sample()
     Handler.model_available = model_available
+    Handler.corrections_path = args.corrections
     Handler.page = render_page(SAMPLES + [gold], model_available, model_message)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Travel Enquiry Extractor demo running at http://localhost:{args.port}")

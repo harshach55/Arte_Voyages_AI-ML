@@ -64,3 +64,65 @@ def test_batch_gives_one_summary_row_per_enquiry():
     assert [r["n"] for r in rows] == [1, 2]
     assert rows[0]["destination"][0]["text"] == "Kerala"
     assert rows[1]["language"] == "de"
+
+
+# --- review and correct ---------------------------------------------------------------------
+
+
+def test_page_warns_about_real_enquiries_and_shows_the_counter():
+    page = demo.render_page(demo.SAMPLES, False, "rules only").decode("utf-8")
+    assert "Do not paste real client enquiries into this demo" in page
+    assert "Save corrections" in page and 'id="correction-count"' in page
+
+
+def test_correction_fields_match_the_gold_format():
+    from src.uc2_extractor.metrics import ALL_FIELDS
+
+    assert [f["name"] for f in demo.CORRECTION_FIELDS] == list(ALL_FIELDS)
+
+
+def test_extract_response_includes_editable_values():
+    data = demo.build_response("Two weeks in Kerala in March", False)
+    assert data["values"]["destination"] == "Kerala"
+    assert data["values"]["duration"] == "2 weeks"
+
+
+def test_save_correction_writes_a_line_and_returns_the_count(tmp_path):
+    path = tmp_path / "corrections.jsonl"
+    text = "Two weeks in Kerala in March"
+    values = demo.build_response(text, False)["values"]
+    values["interests"] = "beach"
+    status, body = demo.handle_save({"text": text, "mode": "rules", "corrected": values}, False, path)
+    assert (status, body) == (200, {"count": 1})
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["corrected"]["interests"] == ["beach"]
+    assert record["extracted"]["interests"] == []
+
+
+def test_saved_extraction_is_recomputed_on_the_server(tmp_path):
+    # whatever the browser sends, the 'extracted' part comes from the server
+    path = tmp_path / "corrections.jsonl"
+    text = "Two weeks in Kerala in March"
+    values = demo.build_response(text, False)["values"]
+    status, _ = demo.handle_save({"text": text, "mode": "rules", "corrected": values,
+                                  "extracted": {"destination": ["Mars"]}}, False, path)
+    assert status == 200
+    assert json.loads(path.read_text(encoding="utf-8"))["extracted"]["destination"] == ["Kerala"]
+
+
+@pytest.mark.parametrize(
+    "data, message",
+    [
+        (None, "request must be JSON"),
+        ({"text": "", "corrected": {}}, "empty or too long"),
+        ({"text": "Kerala", "corrected": "x"}, "must map field names"),
+        ({"text": "Kerala", "corrected": {"party_size": 3}}, "must map field names"),
+        ({"text": "Kerala", "corrected": {"party_size": "three"}}, "Not saved"),
+        ({"text": "Kerala", "corrected": {"hotel": "x"}}, "unknown fields"),
+    ],
+)
+def test_bad_corrections_are_refused_and_not_saved(tmp_path, data, message):
+    path = tmp_path / "corrections.jsonl"
+    status, body = demo.handle_save(data, False, path)
+    assert status == 400 and message in body["error"]
+    assert not path.exists()
