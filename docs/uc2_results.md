@@ -36,6 +36,52 @@ python app/uc2_extract_cli.py --text "My wife and I want 2 weeks in Kerala in Ma
 
 Scores are exact-match precision (P), recall (R) and F1. All fields are pooled for each language. "Values found where gold was empty" counts fields where the extractor produced a value although the gold label was empty.
 
+### Held-out, rules only: the real number
+
+This is the most honest result so far. On 3 November 2026 a new held-out set of 45 synthetic enquiries (15 per language) was written in a different style from the gold set: long rambling emails, very short notes, typos, missing details and unusual wording. All labels were written and the files were frozen before the extractor was run on them. The extractor (rules only, as of commit `3931a86`) was then scored on it once.
+
+The files are in `data/uc2_inquiries/heldout/` (not committed). `FROZEN.txt` there records their SHA-256 fingerprints:
+- enquiries.csv `7FE2E1A7787AF48A323D2009DE6096E4CAF7A5A36EAE5264A3FE670B448217AE`
+- labels.csv `631A231689F6CF8A244E46321FB99EB0C242A796B2741CAA36C74FDB88E2FDD8`
+
+| Language | Enquiries | P | R | F1 | Lenient F1 | Values found where gold was empty |
+|---|---|---|---|---|---|---|
+| English | 15 | 0.92 | 0.71 | 0.81 | 0.81 | 2 |
+| French | 15 | 0.97 | 0.81 | 0.88 | 0.88 | 3 |
+| German | 15 | 0.96 | 0.78 | 0.86 | 0.86 | 4 |
+
+There were 117 field errors: 100 missed, 5 wrong and 12 extra. Precision stays high, so the extractor rarely invents values. Recall is the weak point: it misses values written in ways the rules do not cover.
+
+| Field | P | R | F1 | | Field | P | R | F1 |
+|---|---|---|---|---|---|---|---|---|
+| language | 1.00 | 0.93 | 0.97 | | budget_min | 1.00 | 0.96 | 0.98 |
+| destination | 0.93 | 0.91 | 0.92 | | budget_max | 1.00 | 0.96 | 0.98 |
+| start_date | 0.83 | 0.77 | 0.80 | | currency | 1.00 | 0.96 | 0.98 |
+| end_date | 1.00 | 0.56 | 0.71 | | budget_basis | 0.92 | 0.79 | 0.85 |
+| duration | 0.97 | 0.90 | 0.93 | | budget_band | 1.00 | 1.00 | 1.00 |
+| dates_ambiguous | 1.00 | 1.00 | 1.00 | | accommodation | 1.00 | 0.57 | 0.73 |
+| party_size | 0.88 | 0.66 | 0.75 | | flights | 0.92 | 0.69 | 0.79 |
+| adults | 0.94 | 0.52 | 0.67 | | interests | 0.92 | 0.61 | 0.73 |
+| children | 1.00 | 0.75 | 0.86 | | dietary | 1.00 | 0.60 | 0.75 |
+| ages | 0.89 | 0.44 | 0.59 | | occasion | 1.00 | 0.40 | 0.57 |
+| | | | | | special_requests | 1.00 | 0.41 | 0.58 |
+
+Errors by type (117 in total):
+- 40 in accommodation, interests, special requests, occasion and dietary. The wording is outside the word lists, for example "used to be a maharaja's house", "a desert camp night under canvas", "tied the knot", "noces de perle", "my husband's 50th", "doesn't eat meat", "a car with a driver", "someone to meet us at the airport" and "mad about birds".
+- 35 in travellers. Groups are described indirectly, for example "Dad, me and my partner", "me + 3 mates", "deux couples d'amis", "2 Erw.", "wir (beide 75)", "j'ai 63 ans" and "twins who'll be 12".
+- 19 in dates:
+  - A month written without a preposition ("März,", "Novembre,").
+  - Typos ("Novmber", "debut mars").
+  - An unambiguous end date taken as the start date when the start date was ambiguous (5/11 ... 19/11).
+  - A year not carried over within a range.
+  - "February or March" read as a start month.
+  - "Dez/Jan".
+- 7 in destination. Places that are mentioned but not visited were picked up (Bhutan, Delhi and Agra in a "we did that before" sentence; Delhi as an arrival airport), and typos were missed (Sri Lnka, Maledieven).
+- 7 in budget fields. A budget written in words ("fifteen thousand pounds") was missed entirely, and some per-trip or per-person wording was missed.
+- 6 in flights and 3 in language (very short notes such as "Kerala 6/1-20/1, 2 Erw. + 2 Kinder, Hausboot!").
+
+Any later score on this set, after rules or models are changed with these errors in view, must be labelled "tuned on this set, optimistic".
+
 ### Run 1: before any fixes (the fairer number)
 
 | Language | Enquiries | P | R | F1 | Lenient F1 | Values found where gold was empty |
