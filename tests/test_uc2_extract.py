@@ -307,3 +307,26 @@ def test_french_anniversaire_in_wedding_context_is_not_a_birthday():
 def test_beachfront_hotel_is_not_a_beach_interest():
     p = extract_profile("Eine Villa direkt am Strand mit Babybett.")
     assert p.accommodation == ["villa", "beachfront"] and p.interests == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We are two adults and two children, visiting Rajasthan for ten nights.",
+        "Nous sommes deux adultes et deux enfants, nous voulons visiter le Rajasthan pendant dix nuits",
+        "Wir sind zwei Erwachsene und zwei Kinder und möchten zehn Nächte nach Rajasthan.",
+    ],
+)
+def test_we_are_followed_by_adults_counts_adults_and_children(text):
+    t, _, flags = extract_travellers(text)
+    assert (t.party_size, t.adults, t.children) == (4, 2, 2)
+    assert flags == []
+
+
+@pytest.mark.parametrize(
+    "text, party",
+    [("We are 4 people: 2 adults and 2 children.", 4), ("nous sommes quatre", 4), ("wir sind drei", 3)],
+)
+def test_we_are_with_a_plain_total_still_works(text, party):
+    t, _, _ = extract_travellers(text)
+    assert t.party_size == party

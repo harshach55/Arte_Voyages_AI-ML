@@ -211,6 +211,12 @@ _ONE_CHILD_RE = re.compile(
     r"(?![\s-]*(?:cot|crib|sitt\w*|bett|club|food|seat))",
     _I,
 )
+# "nous sommes deux adultes et deux enfants": the number belongs to "adultes",
+# so it is not the total; the adult and child patterns count it instead
+_NOT_PERSON_NOUN = (
+    rf"(?!\s+(?:(?:young|little|small|petits?|kleine[n]?)\s+)?"
+    rf"(?:adults?|adultes?|erwachsene[nr]?|grown-ups|{_GENERIC_CHILD}|{_SPECIFIC_CHILD})(?!\w))"
+)
 # (pattern, kind): kind "n" gives the party size, "n_adults" gives party size
 # and adults, "group" uses the German "zu dritt" words
 _TOTAL_RES = [
@@ -220,14 +226,16 @@ _TOTAL_RES = [
         rf"reisende[n]?|g[äa]ste[n]?|teilnehmer)(?!\w)", _I), "n"),
     (re.compile(
         rf"(?:we are|we're|we will be|we'll be|there are|there will be|nous sommes|nous serons|nous serions|"
-        rf"on est|on sera|wir sind|wir werden|wir w[äa]ren)\s+{_N2}(?!\w){_UNIT_AFTER}", _I), "n"),
+        rf"on est|on sera|wir sind|wir werden|wir w[äa]ren)\s+{_N2}(?!\w){_UNIT_AFTER}{_NOT_PERSON_NOUN}", _I), "n"),
     (re.compile(rf"(?<!\w){_N}k[öo]pfige?\w*", _I), "n"),
     (re.compile(
         rf"(?<!\w){_N2}\s+(?:friends|colleagues|amis|amies|copains|copines|potes|coll[èe]gues|"
         rf"freunde|freundinnen|kollegen|kolleginnen)(?!\w)", _I), "n_adults"),
     (re.compile(r"\bzu\s+(?P<g>dritt|viert|f[üu]nft|sechst|siebt|acht)(?!\w)", _I), "group"),
-    (re.compile(rf"\bnous\s+{_N2}(?!\w){_UNIT_AFTER}", _I), "n"),
-    (re.compile(rf"\b(?:for|f[üu]r|pour)\s+(?P<n>{_NUMW2})(?!\w){_UNIT_AFTER}(?!\s+(?:of|de|von)\b)", _I), "n"),
+    (re.compile(rf"\bnous\s+{_N2}(?!\w){_UNIT_AFTER}{_NOT_PERSON_NOUN}", _I), "n"),
+    (re.compile(
+        rf"\b(?:for|f[üu]r|pour)\s+(?P<n>{_NUMW2})(?!\w){_UNIT_AFTER}{_NOT_PERSON_NOUN}(?!\s+(?:of|de|von)\b)", _I),
+     "n"),
 ]
 _COUPLE_RE = re.compile(
     r"(?:my|our)\s+(?:wife|husband|partner|fianc[ée]e?|girlfriend|boyfriend|spouse)\s+and\s+(?:I|me)(?!\w)"
