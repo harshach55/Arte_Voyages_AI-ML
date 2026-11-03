@@ -24,6 +24,18 @@ python -m src.uc2_extractor.evaluate
 python -m pytest
 ```
 
+### Browser demo and corrections
+
+```
+python app/uc2_web_demo.py        (then open http://localhost:8000)
+```
+
+After extracting an enquiry you can correct the values and save them. Corrections go to `data/uc2_inquiries/corrections/corrections.jsonl`, which is not committed. Do not paste real client enquiries until the team agrees how to store them. To turn saved corrections into held-out style CSV files for review, run:
+
+```
+python -m src.uc2_extractor.corrections --to-csv data/uc2_inquiries/corrections/as_labels
+```
+
 ### Local API
 
 A small FastAPI app wraps the extractor. It listens on this computer only and never logs or echoes enquiry text.

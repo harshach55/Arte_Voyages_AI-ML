@@ -23,7 +23,18 @@ The extractor turns a free-text travel enquiry in English, French or German into
     - a "rule" or "model" tag with confidence on every value;
     - the scores, with the real number kept apart from the optimistic ones.
   - If the model files are missing, the browser demo runs rules only and says so.
-- **Tests:** 396 pytest tests, all passing. They cover the schema, date handling, tokenizer offsets, metrics, extractor behaviour, the model layer (including negation) and the demo (including that the page never inserts HTML).
+- **Review and correct screen** (in the browser demo):
+  - After extracting one enquiry, a reviewer can edit, remove or add values and click "Save corrections".
+  - Each correction is saved as one line in `data/uc2_inquiries/corrections/corrections.jsonl` (not committed), with the enquiry text, the extracted profile, the corrected profile, the language and a timestamp.
+  - Corrected values must pass the same schema checks as extracted ones. The extracted profile is recomputed on the server, not taken from the browser.
+  - `python -m src.uc2_extractor.corrections --to-csv <folder>` turns the saved corrections into the held-out CSV format, marked "from corrections, needs review".
+  - The page warns that real client enquiries must not be pasted in until the team agrees how to store them.
+- **Local API** (`app/uc2_api.py`, FastAPI):
+  - `POST /extract` returns the validated profile with flags, source text and rule/model tags.
+  - `GET /health` says whether the model is loaded.
+  - Texts are limited to 20,000 characters and bad input gets short errors. Enquiry text is never logged or echoed back.
+  - FastAPI's documentation page is at `/docs`.
+- **Tests:** 433 pytest tests, all passing. They cover the schema, date handling, tokenizer offsets, metrics, extractor behaviour, the model layer (including negation), the demo (including that the page never inserts HTML), the API (including bad input and the missing-model fallback) and saving and converting corrections.
 
 ## 2. Data and licences
 
@@ -40,6 +51,8 @@ python -m src.uc2_extractor.evaluate --show-all
 python -m src.uc2_extractor.evaluate --gold-dir data/uc2_inquiries/heldout --model
 python app/uc2_extract_cli.py --text "My wife and I want 2 weeks in Kerala in March."
 python app/uc2_web_demo.py        (then open http://localhost:8000)
+python app/uc2_api.py             (then open http://127.0.0.1:8001/docs)
+python -m src.uc2_extractor.corrections --to-csv data/uc2_inquiries/corrections/as_labels
 ```
 
 The model files are downloaded once with:
@@ -295,6 +308,9 @@ Other known problems:
 - **Labels come from a fixed list**, so anything outside the list is never extracted.
 - **Rule values have no confidence.** Model confidences are similarity scores, not probabilities.
 - **The budget bands are placeholders.**
+- **No real data has gone through the API or the review screen yet.** Corrections are stored in a plain local file with no access control, deletion or retention rules. The team must agree how client enquiries may be stored before real ones are used.
+- **Corrections are not labelled data yet.** They are one reviewer's edits. They need the same checking as the gold set before they can be used for evaluation, and they must never be mixed into a held-out set.
+- **The API has been tested only on this computer** (127.0.0.1), not deployed. Its `/docs` page loads scripts from a public CDN, and it was not checked in a real browser during development.
 
 ## 8. What is left to do
 
@@ -307,6 +323,7 @@ Other known problems:
 3. Have a fluent speaker check the French and German text in both sets (40 gold, 30 held-out).
 4. Arrange the second annotator: 12 gold enquiries and 9 held-out enquiries are marked.
 5. Agree the real budget bands.
+6. Agree with the team how real client enquiries may be stored before anyone pastes one into the demo or the API.
 
 **Possible technical next steps (only after the above):**
 - Choose the model threshold on a small separate tuning set (not gold, not held-out), and say so in this note.
