@@ -52,7 +52,7 @@ def _rate_rows(counts: dict, keys) -> list[dict]:
     return rows
 
 
-def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame):
+def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame, model=False, threshold=None):
     gold = {(r.id, r.field): r.gold_value for r in labels.itertuples()}
 
     by_field = {f: (Counts(), Counts()) for f in ALL_FIELDS}
@@ -62,7 +62,7 @@ def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame):
     evidence_problems = []
 
     for row in enquiries.itertuples():
-        profile = extract_profile(row.text)
+        profile = extract_profile(row.text, model=model, threshold=threshold)
         evidence_problems += [f"{row.id}: {p}" for p in check_evidence(profile, row.text)]
         pred = profile_to_values(profile)
         lang = row.language
@@ -110,6 +110,28 @@ def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame):
     return field_table, field_lang_table, lang_table, error_table, evidence_problems
 
 
+MODEL_FIELD_NAMES = ("interests", "occasion", "accommodation", "dietary", "special_requests")
+
+
+def sweep(enquiries: pd.DataFrame, labels: pd.DataFrame, thresholds: list[float]) -> pd.DataFrame:
+    """Rules only, then rules + model at each threshold: pooled exact scores on
+    the five fields the model can fill, and over all fields."""
+    rows = []
+    for threshold in [None] + thresholds:
+        field_table, *_ = evaluate(enquiries, labels, model=threshold is not None, threshold=threshold)
+        part = field_table[field_table["field"].isin(MODEL_FIELD_NAMES)]
+        five, total = Counts(), Counts()
+        for t, src in ((five, part), (total, field_table)):
+            t.tp, t.fp, t.fn = int(src.tp.sum()), int(src.fp.sum()), int(src.fn.sum())
+            t.extra_on_empty = int(src.extra_on_empty.sum())
+        rows.append(dict(
+            mode="rules only" if threshold is None else f"rules + model @ {threshold:.2f}",
+            five_fields_p=fmt(five.precision), five_fields_r=fmt(five.recall), five_fields_f1=fmt(five.f1),
+            five_fields_fp=five.fp, all_fields_f1=fmt(total.f1),
+        ))
+    return pd.DataFrame(rows)
+
+
 def annotator_agreement(enquiries: pd.DataFrame, labels: pd.DataFrame) -> str:
     """Exact agreement between annotator 1 and annotator 2 where annotator 2 has worked."""
     sample = set(enquiries.loc[enquiries["second_annotator"].str.lower() == "yes", "id"])
@@ -133,6 +155,11 @@ def main(argv=None) -> int:
     parser.add_argument("--gold-dir", type=Path, default=DEFAULT_GOLD)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--show-all", action="store_true", help="print every error, not just the first 40")
+    parser.add_argument("--model", action="store_true", help="add the optional embedding layer (rules + model)")
+    parser.add_argument("--threshold", type=float, default=None, help="similarity cut-off for the model layer")
+    parser.add_argument("--sweep", default=None,
+                        help="comma-separated thresholds; prints a summary per threshold and exits "
+                             "(use on the gold set only, never on a held-out set)")
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -141,7 +168,14 @@ def main(argv=None) -> int:
     pd.set_option("display.max_colwidth", 60)
 
     enquiries, labels = load_gold(args.gold_dir)
-    field_table, field_lang_table, lang_table, error_table, evidence_problems = evaluate(enquiries, labels)
+    if args.sweep:
+        print(sweep(enquiries, labels, [float(x) for x in args.sweep.split(",")]).to_string(index=False))
+        return 0
+    field_table, field_lang_table, lang_table, error_table, evidence_problems = evaluate(
+        enquiries, labels, model=args.model, threshold=args.threshold
+    )
+    print("Mode: " + ("rules + model" if args.model else "rules only")
+          + (f" (threshold {args.threshold})" if args.model and args.threshold is not None else ""))
 
     print(f"Gold set: {len(enquiries)} enquiries "
           + ", ".join(f"{l}={int((enquiries['language'] == l).sum())}" for l in LANGS))
