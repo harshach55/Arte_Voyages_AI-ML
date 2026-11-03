@@ -467,3 +467,33 @@ def test_negation_still_covers_or_lists(text):
 
 def test_verb_negation_still_covers_and_lists():
     assert extract_profile("We do not want shopping and temples.").interests == []
+
+
+# --- budgets written in words ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, amount, cur",
+    [
+        ("we could stretch to around fifteen thousand pounds", 15000, "GBP"),
+        ("about twenty-five thousand dollars in total", 25000, "USD"),
+        ("un budget de vingt-cinq mille euros", 25000, "EUR"),
+        ("environ quinze mille euros", 15000, "EUR"),
+        ("so um die zwanzigtausend Euro", 20000, "EUR"),
+        ("Budget: fünfundzwanzig tausend Franken", 25000, "CHF"),
+    ],
+)
+def test_budget_in_words(text, amount, cur):
+    b, ev, _ = extract_budget(text)
+    assert (b.amount_min, b.amount_max, b.currency) == (amount, amount, cur)
+    assert ev
+
+
+def test_number_words_without_money_context_are_ignored():
+    b, _, _ = extract_budget("we have done this trip three thousand times in our dreams")
+    assert b.amount_min is None
+
+
+def test_budget_in_words_with_upper_limit():
+    b, _, _ = extract_budget("up to thirty thousand dollars")
+    assert (b.amount_min, b.amount_max) == (None, 30000)

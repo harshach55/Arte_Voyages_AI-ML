@@ -55,6 +55,36 @@ NUMBER_WORDS = {
 }
 
 
+# Number words for amounts written out ("fifteen thousand", "vingt-cinq mille",
+# "fünfundzwanzigtausend"). French numbers above sixty are not covered.
+AMOUNT_WORDS = {
+    # English
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    # French
+    "un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "sept": 7, "huit": 8, "neuf": 9,
+    "dix": 10, "onze": 11, "douze": 12, "treize": 13, "quatorze": 14, "quinze": 15, "seize": 16,
+    "vingt": 20, "trente": 30, "quarante": 40, "cinquante": 50, "soixante": 60,
+    # German
+    "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "sechs": 6, "sieben": 7, "acht": 8,
+    "neun": 9, "zehn": 10, "elf": 11, "zwölf": 12, "dreizehn": 13, "vierzehn": 14, "fünfzehn": 15,
+    "sechzehn": 16, "siebzehn": 17, "achtzehn": 18, "neunzehn": 19, "zwanzig": 20, "dreißig": 30,
+    "dreissig": 30, "vierzig": 40, "fünfzig": 50, "sechzig": 60, "siebzig": 70, "achtzig": 80, "neunzig": 90,
+}
+_AMOUNT_JOIN = re.compile(r"[- ]+|\s+et\s+|und", re.IGNORECASE)
+
+
+def amount_words_to_number(text: str) -> int | None:
+    """'twenty five' -> 25, 'vingt-cinq' -> 25, 'fünfundzwanzig' -> 25; None if unknown."""
+    parts = [p for p in _AMOUNT_JOIN.split(text.lower().strip()) if p]
+    values = [AMOUNT_WORDS.get(p) for p in parts]
+    if not values or None in values:
+        return None
+    return sum(values)
+
+
 def alternation(words) -> str:
     """Regex alternation of words, longest first so 'sept' loses to 'september'."""
     return "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))

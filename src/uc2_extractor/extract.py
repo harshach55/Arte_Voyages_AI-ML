@@ -443,11 +443,16 @@ _AMOUNT = (
 _AMT = rf"(?:{_AMOUNT})(?:\s*(?:k|thousand|mille|tausend|tsd\.?)(?![^\W\d_]))?"
 _TO = r"\s*(?:-|–|to|à|bis|and|et|und)\s*"
 
+_AMOUNT_WORD = rf"(?:{lx.alternation(lx.AMOUNT_WORDS)})"
 _BUDGET_RES = [
     ("range", re.compile(
         rf"(?:(?P<c1>{_CUR})\s*)?(?P<a1>{_AMT})\s*(?P<c2>{_CUR})?{_TO}(?:(?P<c3>{_CUR})\s*)?"
         rf"(?P<a2>{_AMT})(?:\s*(?P<c4>{_CUR}))?", _I)),
     ("single", re.compile(rf"(?P<c1>{_CUR})\s*(?P<a1>{_AMT})|(?P<a2>{_AMT})\s*(?P<c2>{_CUR})", _I)),
+    # "fifteen thousand pounds", "vingt-cinq mille euros", "zwanzigtausend Euro"
+    ("words", re.compile(
+        rf"(?<!\w)(?P<w>{_AMOUNT_WORD}(?:(?:[- ]+|\s+et\s+|und){_AMOUNT_WORD})*)\s*-?\s*"
+        rf"(?:thousand|mille|tausend)(?!\w)(?:\s+(?P<c1>{_CUR}))?", _I)),
     ("keyword", re.compile(rf"\bbudg[eé]t\w*\D{{0,25}}?(?P<a1>{_AMT})", _I)),
 ]
 _BUDGET_WORD = re.compile(r"\bbudg[eé]t", _I)
@@ -514,9 +519,18 @@ def extract_budget(text: str):
                 continue  # a nightly rate, not the trip budget
             g = m.groupdict()
             cur = next((g[c] for c in ("c1", "c2", "c3", "c4") if g.get(c)), None)
-            if kind == "range" and not cur and not _BUDGET_WORD.search(text[max(0, m.start() - 40):m.start()]):
-                continue  # plain number range, e.g. "8 and 11"
-            if kind == "range":
+            near_budget_word = _BUDGET_WORD.search(text[max(0, m.start() - 40):m.start()])
+            if kind in ("range", "words") and not cur and not near_budget_word:
+                continue  # plain number range ("8 and 11") or number words without money context
+            if kind == "words":
+                count = lx.amount_words_to_number(g["w"])
+                if count is None:
+                    continue
+                amount_min = amount_max = float(count * 1000)
+                before = text[max(0, m.start() - 25):m.start()]
+                if _UP_TO.search(before):
+                    amount_min = None
+            elif kind == "range":
                 lo, hi = _parse_amount(g["a1"]), _parse_amount(g["a2"])
                 # "entre 20 et 25 000 €": the first number shares the thousands
                 if lo < 1000 <= hi and hi % 1000 == 0 and lo * 1000 < hi:
