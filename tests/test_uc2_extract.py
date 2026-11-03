@@ -330,3 +330,83 @@ def test_we_are_followed_by_adults_counts_adults_and_children(text):
 def test_we_are_with_a_plain_total_still_works(text, party):
     t, _, _ = extract_travellers(text)
     assert t.party_size == party
+
+
+# --- general traveller and age rules added after the first held-out run -------------------
+
+
+@pytest.mark.parametrize(
+    "text, party, adults",
+    [
+        ("me + 3 mates want to go trekking", 4, 4),
+        ("moi et 2 amis", 3, 3),
+        ("ich und 3 Freunde", 4, 4),
+        ("two couples travelling together", 4, 4),
+        ("nous voyageons à quatre (deux couples d'amis)", 4, 4),
+        ("wir sind zwei Paare aus Hamburg", 4, 4),
+    ],
+)
+def test_friends_and_couples(text, party, adults):
+    t, _, _ = extract_travellers(text)
+    assert (t.party_size, t.adults) == (party, adults)
+
+
+@pytest.mark.parametrize(
+    "text, party",
+    [
+        ("There would be three of us: Dad, me and my partner.", 3),
+        ("Nous partirons à trois en avril.", 3),
+        ("Malediven, 2 Pers., März", 2),
+    ],
+)
+def test_more_ways_to_give_the_party_size(text, party):
+    t, _, _ = extract_travellers(text)
+    assert t.party_size == party
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["2 adults + 2 children", "2 adultes et 2 enfants", "Kerala, 2 Erw. + 2 Kinder"],
+)
+def test_adult_abbreviations_and_plus(text):
+    t, _, _ = extract_travellers(text)
+    assert (t.party_size, t.adults, t.children) == (4, 2, 2)
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("I'm 63 and travelling solo", [63]),
+        ("Je voyage seule, j'ai 63 ans.", [63]),
+        ("ich bin 34 und reise allein", [34]),
+        ("my dad is 78", [78]),
+        ("mon père a 78 ans", [78]),
+        ("mein Vater ist 78", [78]),
+        ("we are both 75", [75, 75]),
+        ("nous avons tous les deux 75 ans", [75, 75]),
+        ("wir (beide 75) möchten reisen", [75, 75]),
+    ],
+)
+def test_more_ways_to_give_ages(text, ages):
+    t, _, _ = extract_travellers(text)
+    assert t.ages == ages
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "après 40 ans d'enseignement, je voyage seule",
+        "nos 30 ans de mariage",
+        "I'm 2 adults short",  # a count, not an age
+        "my wife is 5 nights away",
+    ],
+)
+def test_numbers_that_are_not_ages(text):
+    t, _, _ = extract_travellers(text)
+    assert t.ages == []
+
+
+@pytest.mark.parametrize("text", ["we're both 28", "wir (beide 75)", "tous les deux 70 ans"])
+def test_both_with_an_age_means_two_adults(text):
+    t, _, _ = extract_travellers(text)
+    assert (t.party_size, t.adults) == (2, 2)

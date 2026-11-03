@@ -191,7 +191,8 @@ _N2 = rf"(?P<n>\d{{1,2}}|{_NUMW2})"
 _GROUP_WORDS = {"dritt": 3, "viert": 4, "fünft": 5, "funft": 5, "sechst": 6, "siebt": 7, "acht": 8}
 _UNIT_AFTER = r"(?!\s*(?:weeks?|wochen|semaines?|nights?|n[äa]chte|nuits?|days?|tage|jours?|years?|ans|jahre))"
 
-_ADULTS_RE = re.compile(rf"(?<!\w){_N}\s+(?:adults?|adultes?|erwachsene[nr]?|grown-ups)(?!\w)", _I)
+# "2 Erw." is the usual German short form of Erwachsene
+_ADULTS_RE = re.compile(rf"(?<!\w){_N}\s+(?:adults?|adultes?|erwachsene[nr]?|erw\.|erw|grown-ups)(?!\w)", _I)
 _GENERIC_CHILD = (
     r"children|child|kids?|enfants?|kinder[n]?|teenagers?|teens|adolescents?|jugendliche[n]?|"
     r"grandchildren|petits-enfants|enkel(?:kinder[n]?)?"
@@ -217,20 +218,33 @@ _NOT_PERSON_NOUN = (
     rf"(?!\s+(?:(?:young|little|small|petits?|kleine[n]?)\s+)?"
     rf"(?:adults?|adultes?|erwachsene[nr]?|grown-ups|{_GENERIC_CHILD}|{_SPECIFIC_CHILD})(?!\w))"
 )
+_FRIEND_WORDS = (
+    r"friends|mates|buddies|colleagues|amis|amies|copains|copines|potes|coll[èe]gues|"
+    r"freunde|freundinnen|kumpels|kollegen|kolleginnen"
+)
 # (pattern, kind): kind "n" gives the party size, "n_adults" gives party size
-# and adults, "group" uses the German "zu dritt" words
+# and adults, "n_plus_me" adds the writer ("me + 3 mates"), "couples" doubles
+# ("deux couples"), "group" uses the German "zu dritt" words
 _TOTAL_RES = [
+    (re.compile(
+        rf"\b(?:me|myself|moi|ich)\s*(?:\+|and|&|et|und|plus|with|avec|mit)\s*{_N}\s+(?:other\s+|autres\s+|andere\s+)?"
+        rf"(?:{_FRIEND_WORDS})(?!\w)", _I), "n_plus_me"),
+    (re.compile(rf"(?<!\w){_N2}\s+(?:couples|paare|p[äa]rchen)(?!\w)", _I), "couples"),
     (re.compile(rf"(?:party|group|groupe|gruppe|family|famille|familie) (?:of|de|von) {_N}(?!\w)", _I), "n"),
     (re.compile(
-        rf"(?<!\w){_N}\s+(?:people|persons|guests|travell?ers|pax|personnes|voyageurs|personen|"
+        rf"(?<!\w){_N}\s+(?:people|persons|ppl|guests|travell?ers|pax|personnes|pers\.|pers|voyageurs|personen|"
         rf"reisende[n]?|g[äa]ste[n]?|teilnehmer)(?!\w)", _I), "n"),
+    # "there would be three of us"
+    (re.compile(rf"(?<!\w){_N2}\s+of\s+us(?!\w)", _I), "n"),
+    # "nous voyageons à quatre"
+    (re.compile(
+        rf"\b(?:voyageons|voyagerons|voyagerions|partons|partirons|partirions|serons|serions|sommes)\s+à\s+{_N2}"
+        rf"(?!\w){_UNIT_AFTER}{_NOT_PERSON_NOUN}", _I), "n"),
     (re.compile(
         rf"(?:we are|we're|we will be|we'll be|there are|there will be|nous sommes|nous serons|nous serions|"
         rf"on est|on sera|wir sind|wir werden|wir w[äa]ren)\s+{_N2}(?!\w){_UNIT_AFTER}{_NOT_PERSON_NOUN}", _I), "n"),
     (re.compile(rf"(?<!\w){_N}k[öo]pfige?\w*", _I), "n"),
-    (re.compile(
-        rf"(?<!\w){_N2}\s+(?:friends|colleagues|amis|amies|copains|copines|potes|coll[èe]gues|"
-        rf"freunde|freundinnen|kollegen|kolleginnen)(?!\w)", _I), "n_adults"),
+    (re.compile(rf"(?<!\w){_N2}\s+(?:{_FRIEND_WORDS})(?!\w)", _I), "n_adults"),
     (re.compile(r"\bzu\s+(?P<g>dritt|viert|f[üu]nft|sechst|siebt|acht)(?!\w)", _I), "group"),
     (re.compile(rf"\bnous\s+{_N2}(?!\w){_UNIT_AFTER}{_NOT_PERSON_NOUN}", _I), "n"),
     (re.compile(
@@ -245,7 +259,9 @@ _COUPLE_RE = re.compile(
     r"|(?:meine (?:ehe)?frau|mein (?:ehe)?mann|mein partner|meine partnerin|meine freundin|mein freund|"
     r"mein verlobter|meine verlobte)\s+und\s+ich"
     r"|as a couple|(?:the )?two of us|(?:a|retired|young|married|elderly) couple(?! of)|en couple|un couple"
-    r"|nous deux|tous les deux|zu zweit|wir beide|uns beide|ehepaar|als paar",
+    r"|nous deux|tous les deux|zu zweit|wir beide|uns beide|ehepaar|als paar"
+    # "we're both 28", "wir (beide 75)": "both" with an age means two people
+    r"|(?:both|beide|tous (?:les )?deux)\s+\d{2}(?!\d)",
     _I,
 )
 _SOLO_RE = re.compile(
@@ -255,6 +271,15 @@ _SOLO_RE = re.compile(
 )
 _NUMLIST = r"\d{1,2}(?:\s*(?:,|and|&|et|und)\s*\d{1,2})*"
 _NOT_MONTHS = r"(?!\d)(?!\s*(?:months?|mois|monate))"
+# a number followed by these is a count, amount or length, not an age
+_NOT_AGE_AFTER = (
+    r"(?![\d.,]|\s*(?:nights?|days?|weeks?|n[äa]chte|tage|wochen|nuits|jours|semaines|%|k\b|"
+    r"people|persons|personnes|personen|adults?|adultes|erwachsene|kids|children|enfants|kinder))"
+)
+_RELATIVE = (
+    r"dad|father|mum|mom|mother|husband|wife|son|daughter|partner|grandma|grandpa|grandmother|grandfather|"
+    r"p[èe]re|m[èe]re|papa|maman|mari|femme|fils|fille|vater|mutter|mama|mann|frau|sohn|tochter|oma|opa"
+)
 _CHILD_NOUN = (
     r"children|child|kids?|enfants?|kinder|teenagers?|teens?|adolescents?|sons?|daughters?|"
     r"fils|filles?|s[öo]hne|sohn|t[öo]chter|tochter|boys?|girls?|kind"
@@ -277,9 +302,18 @@ _AGE_RES = [
     (re.compile(
         r"(?:travell?er|ich|i'm|i am|je|seule?|allein|myself)\s*\(\s*(?P<list>\d{1,2})"
         r"(?:\s*(?:jahre|ans|years?(?: old)?))?\s*\)", _I), "list"),
-    (re.compile(r"(?:we're|we are|wir sind|nous avons)\s+(?:both|beide|tous (?:les )?deux)\s+(?P<list>\d{1,2})(?!\d)", _I), "both"),
+    # "we're both 28", "wir (beide 75)", "tous les deux 70 ans"
+    (re.compile(rf"\b(?:both|beide|tous (?:les )?deux)\s+(?P<list>\d{{1,2}}){_NOT_AGE_AFTER}", _I), "both"),
+    # "j'ai 63 ans", "I'm 63", "ich bin 34"
+    (re.compile(
+        rf"\b(?:j'ai|i'm|i am|ich bin)\s+(?P<list>\d{{1,2}})(?:\s*(?:ans|years?(?: old)?|jahre(?: alt)?))?"
+        rf"{_NOT_AGE_AFTER}", _I), "list"),
+    # "my dad is 78", "ma fille a 18 ans", "meine Mutter ist 80"
+    (re.compile(
+        rf"\b(?:{_RELATIVE})\s+(?:is|ist|a|est)\s+(?P<list>\d{{1,2}}){_NOT_MONTHS}{_NOT_AGE_AFTER}", _I), "list"),
     (re.compile(r"\(\s*\d{1,2}\s*(?:months?|mois|monate?n?)(?:\s*old)?\s*\)|\d{1,2}[- ]months?[- ]old", _I), "months"),
-    (re.compile(rf"(?<!\d)(?P<list>{_NUMLIST})\s+ans(?!\w)(?!\s+de\s+mariage)", _I), "list"),
+    # "63 ans" but not "40 ans d'enseignement" or "30 ans de mariage" (years of something)
+    (re.compile(rf"(?<!\d)(?P<list>{_NUMLIST})\s+ans(?!\w)(?!\s+(?:de\b|d'))", _I), "list"),
 ]
 # "fête ses 60 ans", "depuis 20 ans": a number of years, not a traveller's age
 _NOT_AGE_BEFORE = re.compile(r"\b(?:ses|mes|nos|son|ces|depuis|pendant|il y a|tous les)\s+$", _I)
@@ -328,9 +362,13 @@ def extract_travellers(text: str):
         if m:
             if kind == "group":
                 total = _GROUP_WORDS[m.group("g").lower()]
+            elif kind == "n_plus_me":
+                total = _num(m.group("n")) + 1
+            elif kind == "couples":
+                total = _num(m.group("n")) * 2
             else:
                 total = _num(m.group("n"))
-            if kind == "n_adults" and adults is None:
+            if kind in ("n_adults", "n_plus_me", "couples") and adults is None:
                 adults = total
             evidence.append(_ev("travellers", text, m.start(), m.end()))
             break
