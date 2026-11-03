@@ -50,7 +50,7 @@ The `second_annotator` column marks 12 enquiries (20 percent). A second person s
 **Dates**
 - `start_date` and `end_date` are filled only when the day and month are clear. If only the month is clear, use the month form.
 - A numeric date where both numbers could be the month (3/4, 02.01.) goes in `dates_ambiguous`, written exactly as in the text, and the start and end stay empty. This applies even when the context makes one reading likely.
-- Never add a year that is not written.
+- Never add a year that is not written. A year written once in a date range applies to both ends: "8 November to 21 November 2027" gives start 2027-11-08 and end 2027-11-21.
 - Holidays and seasons (Easter, Toussaint, next autumn) are not dates.
 - Alternatives ("late October or early November") are not a range, so leave the dates empty.
 - Dates that are not travel dates are ignored, for example the date of a phone call or an email signature.
