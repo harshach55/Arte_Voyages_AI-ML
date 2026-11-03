@@ -69,9 +69,8 @@ def test_batch_gives_one_summary_row_per_enquiry():
 # --- review and correct ---------------------------------------------------------------------
 
 
-def test_page_warns_about_real_enquiries_and_shows_the_counter():
+def test_page_shows_the_save_button_and_the_counter():
     page = demo.render_page(demo.SAMPLES, False, "rules only").decode("utf-8")
-    assert "Do not paste real client enquiries into this demo" in page
     assert "Save corrections" in page and 'id="correction-count"' in page
 
 

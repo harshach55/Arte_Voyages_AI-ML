@@ -351,8 +351,6 @@ PAGE = """<!doctype html>
   .scores .real th { background: #dff0d8; }
   .scores .opt th { background: #f7e7c6; }
   .small { font-size: 17px; color: #555; }
-  .privacy { padding: 12px 16px; border-radius: 6px; background: #fde8e8; border: 2px solid #c0392b;
-             color: #6b1a12; font-weight: bold; }
   .review { margin-top: 26px; padding: 16px 18px; border: 2px solid #1f4e8c; border-radius: 6px; }
   .review h3 { margin: 0 0 6px; font-size: 22px; }
   .review table td { vertical-align: middle; }
@@ -371,8 +369,6 @@ PAGE = """<!doctype html>
 <body>
 <main>
   <h1>Travel Enquiry Extractor (English, French, German)</h1>
-  <p class="privacy">Do not paste real client enquiries into this demo until the team agrees how to store them.
-    Saved corrections are written to a file on this computer (data/uc2_inquiries/corrections/).</p>
   <p id="model-status" class="notice"></p>
 
   <div class="controls">

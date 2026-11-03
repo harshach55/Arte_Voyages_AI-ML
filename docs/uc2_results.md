@@ -28,7 +28,6 @@ The extractor turns a free-text travel enquiry in English, French or German into
   - Each correction is saved as one line in `data/uc2_inquiries/corrections/corrections.jsonl` (not committed), with the enquiry text, the extracted profile, the corrected profile, the language and a timestamp.
   - Corrected values must pass the same schema checks as extracted ones. The extracted profile is recomputed on the server, not taken from the browser.
   - `python -m src.uc2_extractor.corrections --to-csv <folder>` turns the saved corrections into the held-out CSV format, marked "from corrections, needs review".
-  - The page warns that real client enquiries must not be pasted in until the team agrees how to store them.
 - **Local API** (`app/uc2_api.py`, FastAPI):
   - `POST /extract` returns the validated profile with flags, source text and rule/model tags.
   - `GET /health` says whether the model is loaded.
