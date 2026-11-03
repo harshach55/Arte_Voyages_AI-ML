@@ -1,10 +1,10 @@
-# UC2 Travel Enquiry Extractor: First Version Results
+# UC2 Travel Enquiry Extractor: Results
 
-Date: 30 October 2026
+First version: 30 October 2026. Last updated: 3 November 2026.
 
 ## 1. What was built
 
-The first version of the extractor turns a free-text travel enquiry in English, French or German into a validated JSON client profile. It uses rules only, with no machine-learning model.
+The extractor turns a free-text travel enquiry in English, French or German into a validated JSON client profile. It is rule-based. An optional model layer (section 4) can fill some label fields that the rules leave empty.
 
 - **Schema** (`src/uc2_extractor/schema.py`): one pydantic definition of the profile.
   - Fields: destination, dates or duration, travellers (party size, adults, children, ages), budget (amount, currency, per trip or per person, band), accommodation, flights, interests, dietary needs, occasion, special requests and must-haves, and language.
@@ -14,8 +14,16 @@ The first version of the extractor turns a free-text travel enquiry in English, 
 - **Rule-based extractors** (`extract.py`, `lexicon.py`): keyword lists in three languages, number words, a simple check for negation ("no shopping", "kein", "pas de"), and budget parsing for 20,000 / 20.000 / 20 000 / 4,00,000.
 - **Language detection** (`text.py`): counts common function words. It needs no extra package.
 - **Evaluation** (`evaluate.py`, `metrics.py`): exact and lenient precision, recall and F1 per field and per language, and a table of every error.
-- **Command-line demo** (`app/uc2_extract_cli.py`).
-- **Tests:** 241 pytest tests, all passing. They cover the schema, date handling, tokenizer offsets, metrics and extractor behaviour.
+- **Optional model layer** (`semantic.py`). See section 4.
+- **Demos:**
+  - Command line (`app/uc2_extract_cli.py`).
+  - Browser (`app/uc2_web_demo.py`), with these features:
+    - one enquiry or several (one per line);
+    - rules only or rules + model;
+    - a "rule" or "model" tag with confidence on every value;
+    - the scores, with the real number kept apart from the optimistic ones.
+  - If the model files are missing, the browser demo runs rules only and says so.
+- **Tests:** 396 pytest tests, all passing. They cover the schema, date handling, tokenizer offsets, metrics, extractor behaviour, the model layer (including negation) and the demo (including that the page never inserts HTML).
 
 ## 2. Data and licences
 
@@ -29,7 +37,15 @@ The first version of the extractor turns a free-text travel enquiry in English, 
 .venv\Scripts\activate
 python -m pytest
 python -m src.uc2_extractor.evaluate --show-all
+python -m src.uc2_extractor.evaluate --gold-dir data/uc2_inquiries/heldout --model
 python app/uc2_extract_cli.py --text "My wife and I want 2 weeks in Kerala in March."
+python app/uc2_web_demo.py        (then open http://localhost:8000)
+```
+
+The model files are downloaded once with:
+
+```
+python -c "from src.uc2_extractor.semantic import download_model; download_model()"
 ```
 
 ## 4. Results
@@ -167,7 +183,26 @@ Errors fell from 74 to 71, and precision did not drop.
 
 **Plain conclusion.** At a threshold chosen fairly on the gold set, the model helps a little and safely, but not much. It fixed 5 of the 34 wording errors that remain after the rule improvements, and none of the interests errors. A lower threshold would catch more, but on the gold set it added many wrong values (73 at 0.60), so it is not used. The real test is the second held-out set.
 
-### Run 1: before any fixes (the fairer number)
+**Two things that make even these 5 fixes look better than they are:**
+- **The example phrases were written after seeing this set's errors.** Several are close to its wording:
+  - "a car with our own driver" (held-out HE05: "a car with a driver");
+  - "ein kleines, persönliches Hotel mit Charme" (HD10);
+  - "a lodge in the jungle" (HF13);
+  - "un petit hôtel de charme" (HF15).
+
+  The 5 fixes are therefore not independent evidence that the model generalises.
+- **On new wording the model is mostly below the threshold.** A quick check on phrasings that appear in no test set and no example phrase found the right label ranked first, but under 0.88:
+  - "keen birders" → wildlife 0.70;
+  - "pampered with massages" → wellness 0.87;
+  - "make proper curries" → food and cooking 0.76.
+
+  At 0.88 the model therefore adds almost nothing on fresh text. Choosing a better threshold needs a small separate tuning set: not the gold set (the rules already cover it) and not a held-out set (that would be tuning on the test).
+
+### Earlier results on the gold set (60 enquiries)
+
+The gold set was written by the same person who wrote the rules, and the rules were later fixed on it. Even its run 1 is therefore less fair than the held-out real number above. The results are kept here for the record.
+
+#### Gold set run 1: before any fixes
 
 | Language | Enquiries | P | R | F1 | Lenient F1 | Values found where gold was empty |
 |---|---|---|---|---|---|---|
@@ -177,7 +212,7 @@ Errors fell from 74 to 71, and precision did not drop.
 
 There were 135 field errors in total: 93 missed, 18 wrong and 24 extra.
 
-### Run 2: after fixing the errors seen in run 1 (optimistic)
+#### Gold set run 2: after fixing the errors seen in run 1 (optimistic)
 
 | Language | Enquiries | P | R | F1 | Lenient F1 | Values found where gold was empty |
 |---|---|---|---|---|---|---|
@@ -189,7 +224,7 @@ There were 42 field errors in total: 32 missed, 1 wrong and 9 extra.
 
 **Run 2 is not a fair test.** The rules were changed after looking at the run 1 errors on the same 60 enquiries. Between the runs, one gold label was also corrected (E15: adults = 12, to match how "three friends" was labelled). Run 1 is the better estimate of how the extractor does on new text. Neither run says anything about real customer enquiries.
 
-### F1 by field (all languages)
+#### Gold set F1 by field (all languages)
 
 | Field | Run 1 F1 | Run 2 F1 |
 |---|---|---|
@@ -221,36 +256,59 @@ In both runs, all evidence spans matched the enquiry text exactly.
 
 ## 5. What works
 
-- Language detection was correct for all 60 enquiries in both runs.
-- Currency, budget amounts and the placeholder band were reliable on this set, including European number formats and "up to" / "bis zu" / "jusqu'à".
-- Ambiguous numeric dates (3/4, 02.01.) are flagged with both readings instead of guessed.
-- Clear statements of party size, dates, dietary needs, occasions and accommodation types work in all three languages.
-- Values are not invented for empty fields in most cases. Run 1 found values where the gold was empty 19 times across 1,260 field values, and run 2 found 9.
+- **Precision is high everywhere.** On new text the extractor rarely invents a value: precision on the first held-out run was 0.92 to 0.97.
+- **Budgets:** amounts, currency and the placeholder band were reliable on both sets. This includes European and Indian number formats, "up to" / "bis zu" / "jusqu'à", and budgets written in words.
+- **Ambiguous numeric dates** (3/4, 02.01.) are flagged with both readings instead of guessed.
+- **Clear statements** of destination, dates, trip length, party size and dietary needs work in all three languages.
+- **Every value comes with the text it was taken from.** In every run, all evidence spans matched the enquiry text exactly.
+- **The model layer is safe at its threshold:** it added no wrong values on the held-out set. Rules only remains the default.
 
-## 6. What fails (errors still present in run 2)
+## 6. What fails
 
-- **Children and adults implied rather than stated.** Examples are "kids aged 9 and 13" with no number before "kids", "three friends" when a group count is also given, and "Nous serons deux", "on est 2 potes" or "my parents" without the word adults.
-- **Part-lengths of a trip.** "One week in Sri Lanka followed by a few days in the Maldives" gives 1 week, and "add 3 nights in Jaipur" gives 3 nights. These are only parts of the trip.
-- **Dates that are not travel dates.** A phone-call date and an email "Sent" date were flagged as ambiguous travel dates (E14). "Turns 60 in March" gave March as the start date (E17).
-- **Paraphrases outside the word lists.** Examples: "vehicle with driver", "something special arranged", "Hôtels de charme historiques", "small boutique properties", "gutes Essen", "une dizaine de jours", "Yoga-Retreat-Woche".
-- **Places outside the place list** (Pangong Lake), and Mumbai picked up as a destination in "une famille de Mumbai".
-- **One problem made worse by a fix.** "Two of us are vegetarian" is now read as a couple (adults = 2) in a group of 8 (P04-en).
+The remaining **71 errors** on the first held-out set, with rules + model (tuned on this set, optimistic), are:
+
+| Group | Errors | Typical examples |
+|---|---|---|
+| Accommodation, interests, special requests, occasion, dietary | 31 (29 missed, 2 extra) | Wording outside the word lists that the model scores below the threshold, e.g. "mad about birds", "old buildings", "under canvas", "tied the knot", "noces de perle", "someone to meet us at the airport" |
+| Travellers | 19 (15 missed, 2 wrong, 2 extra) | Adults implied by a group or family ("group of 12 colleagues", "me, my wife, our twins"); ages written as "twins who'll be 12"; "(30 ans !)" read as an age; "2 or 3 of us" read as 3 |
+| Flights | 6 | Heathrow not linked to London; "partirons de Lyon", "Départ de Genève"; "sort our own flights"; "pro Person ohne Flüge" wrongly read as "flights not needed" |
+| Dates | 5 | Trip length missed when another length is also mentioned ("a day on a houseboat"); "une dizaine de nuits", "une douzaine de jours"; a part-length taken as the trip ("eine Woche in Udaipur"); "vacances de février" |
+| Budget | 4 | Per trip / per person wording such as "all in", "for the two of us", "par persone" (typo) |
+| Destination | 3 | Places mentioned but not visited ("we did Delhi and Agra before", Delhi as an arrival airport); Annapurna not in the place list |
+| Language | 3 | Very short notes with no clear words or letters |
+
+Other known problems:
+- **"Two of us are vegetarian"** is read as a couple (gold P04-en).
+- **The demo's French example works now** ("Nous sommes deux adultes et deux enfants" gives 4 travellers), but short notes with only place names still get no language.
 
 ## 7. Honest limits
 
-- The gold set is small (60 enquiries) and synthetic. It is a first evaluation set, not proof that the extractor is ready for production.
-- The same person wrote the rules and the gold set, so the scores are likely higher than they would be on text written by someone else. Six enquiries are marked "rewrite" for this reason.
-- The French and German enquiries were not written by native speakers and have not yet been checked by one.
-- The second annotator has not labelled anything yet, so there is no agreement figure.
-- Good results in one language do not show the same quality in another, and none of these results show performance on real Kenexoft enquiries.
-- The evaluation compares values, not character spans, because the gold set records the expected values.
-- Labels come from a fixed list, so anything outside the list is not extracted.
-- The extractor gives no confidence scores.
-- The budget bands are placeholders.
+- **All the test text is synthetic.** It was written for this project, not taken from real customer messages, so none of these results show performance on real Kenexoft enquiries.
+- **The only fair number is the first held-out run** (0.81 / 0.88 / 0.86). Every later number was produced after looking at that set's errors and is optimistic.
+- **The same person wrote the rules, the example phrases for the model, and both test sets.** That makes all scores likely higher than on text written by others.
+- **The model's example phrases were written after seeing the held-out errors.** Some are close to held-out wording, so its 5 fixes there are not independent evidence (section 4).
+- **The model threshold was chosen on the gold set**, where the rules already cover the wording. As a result the model is very cautious, and on fresh wording it mostly stays below the threshold.
+- **French and German texts in both sets** were not written by native speakers and have not been checked by one.
+- **No second annotator has labelled anything yet**, so there is no agreement figure.
+- **Results in one language do not show the same quality in another.**
+- **The evaluation compares values, not character spans.**
+- **Labels come from a fixed list**, so anything outside the list is never extracted.
+- **Rule values have no confidence.** Model confidences are similarity scores, not probabilities.
+- **The budget bands are placeholders.**
 
-## 8. Suggested next steps
+## 8. What is left to do
 
-1. Rewrite the six "rewrite" enquiries, have a fluent speaker check the French and German, and complete the second annotation (12 enquiries).
-2. Write a new set of enquiries that is kept apart and never used to change the rules. Report that score as the main result.
-3. Agree the real budget bands and replace the placeholders.
-4. Only if the rules are clearly not good enough in French or German on fresh data, consider the CRF step that was planned for later.
+**By hand (project owner):**
+1. Collect held-out set 2 from colleagues in `data/uc2_inquiries/heldout2/`, using the template and instruction sheet there. It is then labelled, frozen with SHA-256 fingerprints, and scored once at the end, for rules only and rules + model.
+2. Check the labels:
+   - **Gold set:** rewrite the 6 "rewrite" enquiries, and check the enquiries marked "check labels".
+   - **First held-out set:** check all 45, starting with the judgement calls listed in their review notes.
+   - Record progress in the `checked_by` and `checked_on` columns.
+3. Have a fluent speaker check the French and German text in both sets (40 gold, 30 held-out).
+4. Arrange the second annotator: 12 gold enquiries and 9 held-out enquiries are marked.
+5. Agree the real budget bands.
+
+**Possible technical next steps (only after the above):**
+- Choose the model threshold on a small separate tuning set (not gold, not held-out), and say so in this note.
+- Add rules for adults implied by groups or families, "already visited" places, and departure cities such as Heathrow.
+- Consider the CRF step only if French or German stay clearly weaker on held-out set 2.
