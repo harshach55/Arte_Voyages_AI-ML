@@ -192,3 +192,35 @@ def test_check_evidence_finds_wrong_offsets():
     bad = ClientProfile(evidence=[Evidence(field="destination", text="India", start=16, end=21)])
     assert check_evidence(good, text) == []
     assert len(check_evidence(bad, text)) == 1
+
+
+# --- provenance -----------------------------------------------------------------------------
+
+from src.uc2_extractor.extract import extract_profile  # noqa: E402
+from src.uc2_extractor.schema import Provenance  # noqa: E402
+
+
+def test_model_value_needs_a_confidence():
+    with pytest.raises(ValidationError):
+        Provenance(field="interests", value="wildlife", source="model")
+    assert Provenance(field="interests", value="wildlife", source="model", confidence=0.71).confidence == 0.71
+
+
+def test_rule_value_has_no_confidence():
+    with pytest.raises(ValidationError):
+        Provenance(field="interests", value="wildlife", source="rule", confidence=0.9)
+
+
+def test_confidence_must_be_between_0_and_1():
+    with pytest.raises(ValidationError):
+        Provenance(field="interests", value="x", source="model", confidence=1.2)
+
+
+def test_rules_mark_every_value_as_rule():
+    p = extract_profile("My wife and I want 2 weeks in Kerala in March, vegetarian, budget USD 20,000.")
+    by_field = {(x.field, x.value) for x in p.provenance}
+    assert ("destination", "Kerala") in by_field
+    assert ("dietary", "vegetarian") in by_field
+    assert {"language", "dates", "travellers", "budget"} <= {x.field for x in p.provenance}
+    assert all(x.source == "rule" and x.confidence is None for x in p.provenance)
+    assert all(e.source == "rule" for e in p.evidence)

@@ -18,6 +18,7 @@ from .schema import (
     ClientProfile,
     Evidence,
     Flag,
+    Provenance,
     Travellers,
     band_for_amount,
     load_band_config,
@@ -696,4 +697,27 @@ def extract_profile(text: str) -> ClientProfile:
         flags=flags,
     )
     profile.flags = _missing_flags(profile) + flags
+    profile.provenance = rule_provenance(profile)
     return profile
+
+
+LIST_FIELDS = ("destination", "accommodation", "flights", "interests", "dietary", "occasion", "special_requests")
+
+
+def rule_provenance(p: ClientProfile) -> list[Provenance]:
+    """Mark every value the rules found as coming from a rule."""
+    out = []
+    if p.language:
+        out.append(Provenance(field="language", source="rule"))
+    d = p.dates
+    if d.start or d.end or d.duration or d.ambiguous:
+        out.append(Provenance(field="dates", source="rule"))
+    t = p.travellers
+    if t.party_size is not None or t.adults is not None or t.children is not None or t.ages:
+        out.append(Provenance(field="travellers", source="rule"))
+    b = p.budget
+    if b.amount_min is not None or b.amount_max is not None:
+        out.append(Provenance(field="budget", source="rule"))
+    for f in LIST_FIELDS:
+        out += [Provenance(field=f, value=v, source="rule") for v in getattr(p, f)]
+    return out

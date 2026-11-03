@@ -105,6 +105,7 @@ class Evidence(_Strict):
     text: str
     start: int = Field(ge=0)
     end: int
+    source: Literal["rule", "model"] = "rule"
 
     @field_validator("field")
     @classmethod
@@ -135,6 +136,37 @@ class Flag(_Strict):
         if v not in FIELD_NAMES:
             raise ValueError(f"unknown field {v!r}")
         return v
+
+
+class Provenance(_Strict):
+    """Where one extracted value came from.
+
+    `value` is a label for list fields (e.g. "wildlife"); for the language,
+    dates, travellers and budget sections it is empty and covers the whole
+    section. Rule values have no confidence. Model values carry the cosine
+    similarity that matched them (0 to 1); it is a matching score, not a
+    calibrated probability.
+    """
+
+    field: str
+    value: str = ""
+    source: Literal["rule", "model"]
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+
+    @field_validator("field")
+    @classmethod
+    def _known_field(cls, v: str) -> str:
+        if v not in FIELD_NAMES:
+            raise ValueError(f"unknown field {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _model_needs_confidence(self) -> "Provenance":
+        if self.source == "model" and self.confidence is None:
+            raise ValueError("a model value needs a confidence")
+        if self.source == "rule" and self.confidence is not None:
+            raise ValueError("rule values have no confidence")
+        return self
 
 
 class PartialDate(_Strict):
@@ -280,6 +312,7 @@ class ClientProfile(_Strict):
     special_requests: list[str] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
     flags: list[Flag] = Field(default_factory=list)
+    provenance: list[Provenance] = Field(default_factory=list)
 
 
 def check_evidence(profile: ClientProfile, text: str) -> list[str]:
