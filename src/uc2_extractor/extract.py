@@ -57,11 +57,25 @@ _SPECIAL = _compile(lx.SPECIAL_REQUESTS)
 _CLAUSE_BREAK = re.compile(r"[.;:!?\n,()]|\b(?:but|mais|aber|however|sondern)\b", _I)
 
 
+_AND_RE = re.compile(r"\b(?:and|und|et)\b", _I)
+
+
 def _negated(text: str, start: int) -> bool:
-    """True if a negation word appears earlier in the same clause (up to 40 chars)."""
+    """True if a negation word appears earlier in the same clause (up to 40 chars).
+
+    "no/kein/aucun" only negate their own noun phrase, so for them the scope
+    ends at "and/und/et" ("kein scharfes Essen und ist Diabetiker"), while
+    "or" keeps it going ("no shopping or temples").
+    """
     window = text[max(0, start - 40):start]
     tail = _CLAUSE_BREAK.split(window)[-1]
-    return bool(lx.NEGATION_RE.search(tail))
+    negations = list(lx.NEGATION_RE.finditer(tail))
+    if not negations:
+        return False
+    last = negations[-1]
+    if lx.DETERMINER_NEGATION_RE.match(last.group()) and _AND_RE.search(tail, last.end()):
+        return False
+    return True
 
 
 def _ev(field: str, text: str, start: int, end: int) -> Evidence:

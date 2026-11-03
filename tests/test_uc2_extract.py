@@ -410,3 +410,60 @@ def test_numbers_that_are_not_ages(text):
 def test_both_with_an_age_means_two_adults(text):
     t, _, _ = extract_travellers(text)
     assert (t.party_size, t.adults) == (2, 2)
+
+
+# --- negation rules added after the first held-out run -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, label",
+    [
+        ("he doesn't eat meat", "vegetarian"),
+        ("il ne mange pas de viande", "vegetarian"),
+        ("sie isst kein Fleisch", "vegetarian"),
+        ("I don't eat dairy", "lactose-free"),
+        ("mon mari ne supporte pas le lactose", "lactose-free"),
+        ("er verträgt keine Milchprodukte", "lactose-free"),
+        ("my husband can't have anything with gluten", "gluten-free"),
+        ("elle ne supporte pas le gluten", "gluten-free"),
+        ("ich vertrage kein Gluten", "gluten-free"),
+    ],
+)
+def test_negative_wording_that_names_a_diet(text, label):
+    assert extract_profile(text).dietary == [label]
+
+
+@pytest.mark.parametrize(
+    "text, label",
+    [
+        ("a few nights of doing nothing on a beach", "beach"),
+        ("rien que la plage", "beach"),
+        ("nichts tun, nur Strand", "beach"),
+    ],
+)
+def test_nothing_is_not_a_refusal(text, label):
+    assert label in extract_profile(text).interests
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Mein Mann verträgt kein scharfes Essen und ist Diabetiker.",
+        "Mon mari ne veut aucun plat épicé et il est diabétique.",
+        "No spicy food and he is diabetic.",
+    ],
+)
+def test_determiner_negation_stops_at_and(text):
+    assert extract_profile(text).dietary == ["diabetic"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["No shopping or temples please", "Pas de shopping ni de temples", "Keine Tempel oder Shopping bitte"],
+)
+def test_negation_still_covers_or_lists(text):
+    assert extract_profile(text).interests == []
+
+
+def test_verb_negation_still_covers_and_lists():
+    assert extract_profile("We do not want shopping and temples.").interests == []

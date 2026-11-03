@@ -223,12 +223,26 @@ INTERESTS = {
 
 DIETARY = {
     "vegetarian": [r"vegetarians?", r"v[ée]g[ée]tarien(?:ne)?s?", r"vegetarisch(?:e[nrs]?)?", r"veggie",
-                   r"vegetarier(?:in|innen)?"],
+                   r"vegetarier(?:in|innen)?",
+                   # negative wording that means vegetarian
+                   r"(?:doesn't|does not|don't|do not|won't|never) eats? (?:any )?meat", r"no meat",
+                   r"meat-?free", r"ne mange(?:nt)? (?:pas|plus|jamais) de viande", r"sans viande",
+                   r"(?:isst|essen|esse) kein(?:e[nm]?)? fleisch", r"kein fleisch", r"fleischlos(?:e[nrs]?)?"],
     "vegan": [r"vegan(?:e|s|er)?", r"v[ée]gan(?:e|s)?", r"v[ée]g[ée]talien(?:ne)?s?"],
     "gluten-free": [r"gluten[- ]free", r"c(?:o)?eliac", r"sans gluten", r"glutenfrei(?:e[nr]?)?",
-                    r"z[öo]liakie", r"c(?:œ|oe)liaque"],
+                    r"z[öo]liakie", r"c(?:œ|oe)liaque",
+                    r"(?:can't|cannot|can not|doesn't|does not|don't|do not) (?:eat|have|tolerate) "
+                    r"(?:anything with |any )?gluten",
+                    r"ne (?:supporte|tol[èe]re|digère) pas (?:le )?gluten",
+                    r"(?:vertr[äa]gt|vertragen|vertrage) kein(?:e[nm]?)? gluten", r"kein gluten"],
     "lactose-free": [r"lactose[- ]free", r"lactose intoleran(?:t|ce)", r"dairy[- ]free", r"sans lactose",
-                     r"intol[ée]ran(?:t|te|ce) au lactose", r"laktosefrei(?:e[nr]?)?", r"laktoseintoleranz"],
+                     r"intol[ée]ran(?:t|te|ce) au lactose", r"laktosefrei(?:e[nr]?)?", r"laktoseintoleranz",
+                     r"(?:can't|cannot|doesn't|does not|don't|do not) (?:eat|have|take|tolerate) (?:any )?dairy",
+                     r"no dairy",
+                     r"ne (?:supporte|tol[èe]re|digère|mange) pas (?:le lactose|les produits laitiers)",
+                     r"sans produits laitiers",
+                     r"(?:vertr[äa]gt|vertragen|vertrage) kein(?:e[nm]?)? (?:laktose|milchprodukte|milch)",
+                     r"keine milchprodukte"],
     "nut allergy": [r"(?:pea)?nut allerg(?:y|ies)", r"allergic to (?:pea)?nuts",
                     r"allergi(?:e|que)s? aux (?:noix|arachides|fruits [àa] coque|cacahu[èe]tes)",
                     r"(?:erd)?nussallergie", r"allergisch gegen (?:erd)?n[üu]sse"],
@@ -300,8 +314,12 @@ CURRENCIES = {
     "USD?": [r"\$", r"dollars?"],
 }
 
+# "nothing" is left out on purpose: "doing nothing on a beach" is not a refusal
 NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|without|don't|do not|doesn't|nothing|pas|sans|ni|aucune?|jamais|"
+    r"\b(?:no|not|never|without|don't|do not|doesn't|pas|sans|ni|aucune?|jamais|"
     r"kein(?:e[nmrs]?)?|nicht|ohne|nie)\b|\bnon[- ]$",
     re.IGNORECASE,
 )
+# negation words that only cover their own noun phrase: "kein scharfes Essen
+# und ist Diabetiker" refuses spicy food, not the diabetic diet
+DETERMINER_NEGATION_RE = re.compile(r"^(?:no|kein(?:e[nmrs]?)?|aucune?)$", re.IGNORECASE)
