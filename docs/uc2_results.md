@@ -114,6 +114,59 @@ There are now 74 field errors (63 missed, 2 wrong, 9 extra), down from 117:
 
 These scores are **optimistic**, because the rules were chosen with this set's errors in view. The fair test of these changes is the second held-out set, which colleagues are writing and which will be scored once at the end. On the original gold set the scores did not change (English 0.96, French 0.98, German 0.98; 42 errors), so the new rules did not break anything there.
 
+### Optional model layer: rules only against rules plus model (tuned on this set, optimistic)
+
+**The model.**
+- `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, the quantised ONNX file `onnx/model_quint8_avx2.onnx` (113 MiB). It runs with onnxruntime on the CPU, with no PyTorch.
+- The licence is Apache-2.0 according to the model card on Hugging Face. The licences of its training data were not checked.
+- The files are kept in `models/uc2_minilm/`, which is not committed.
+
+**How it is used.**
+- The rules run first. The model only fills interests, occasion, accommodation, dietary or special requests when the rules left that field empty.
+- It compares short pieces of the enquiry with a few example phrases per label, written by hand in English, French and German.
+- Any clause that contains a negation word is skipped, including the shorter windows cut from it.
+- Each value is marked "rule" or "model". Model values carry the similarity score as their confidence. This is a matching score, not a probability.
+- Rules only is still the default (`model=False`).
+
+**Choosing the threshold (on the gold set only).**
+
+| Mode on the gold set | Precision (5 fields) | Recall (5 fields) | F1 (5 fields) | False positives |
+|---|---|---|---|---|
+| Rules only | 0.99 | 0.93 | 0.96 | 1 |
+| Rules + model at 0.60 | 0.72 | 0.94 | 0.81 | 73 |
+| Rules + model at 0.75 | 0.94 | 0.94 | 0.94 | 11 |
+| Rules + model at 0.85 | 0.99 | 0.93 | 0.96 | 2 |
+| Rules + model at 0.88 | 0.99 | 0.93 | 0.96 | 1 |
+
+On the gold set the model never beat rules only. The rules were built on this set and already cover its wording. The threshold was set to 0.88, the lowest value at which the model added no false positive on the gold set. This makes the model cautious.
+
+**Result on the first held-out set at threshold 0.88.** Both rows are tuned on this set, optimistic.
+
+| Language | Rules only F1 | Rules + model F1 | Rules only P | Rules + model P |
+|---|---|---|---|---|
+| English | 0.87 | 0.87 | 0.94 | 0.95 |
+| French | 0.91 | 0.92 | 0.98 | 0.98 |
+| German | 0.93 | 0.94 | 0.99 | 0.99 |
+
+| Field | Rules only (correct / missed / extra) | Rules + model (correct / missed / extra) |
+|---|---|---|
+| accommodation | 12 / 9 / 0 | 14 / 7 / 0 |
+| occasion | 4 / 6 / 0 | 5 / 5 / 0 |
+| special_requests | 7 / 10 / 0 | 9 / 8 / 0 |
+| interests | 23 / 13 / 2 | 23 / 13 / 2 |
+| dietary | 14 / 1 / 0 | 14 / 1 / 0 |
+
+The model fixed 5 values and added no wrong values:
+- "frisch verheiratetes Paar" → honeymoon
+- "a car with a driver" → private driver
+- "quelqu'un qui conduit" → private driver
+- "lodge au cœur de la jungle" → safari lodge
+- "hôtels de charme" → boutique hotel
+
+Errors fell from 74 to 71, and precision did not drop.
+
+**Plain conclusion.** At a threshold chosen fairly on the gold set, the model helps a little and safely, but not much. It fixed 5 of the 34 wording errors that remain after the rule improvements, and none of the interests errors. A lower threshold would catch more, but on the gold set it added many wrong values (73 at 0.60), so it is not used. The real test is the second held-out set.
+
 ### Run 1: before any fixes (the fairer number)
 
 | Language | Enquiries | P | R | F1 | Lenient F1 | Values found where gold was empty |
