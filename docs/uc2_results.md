@@ -82,6 +82,38 @@ Errors by type (117 in total):
 
 Any later score on this set, after rules or models are changed with these errors in view, must be labelled "tuned on this set, optimistic".
 
+### Held-out after general rule improvements: tuned on this set, optimistic
+
+After the run above, the rules were improved as general rules, not as copies of single enquiries:
+- travellers given as friends or couples ("me + 3 mates", "deux couples", "zwei Paare", "three of us", "2 Erw.");
+- more ways of giving ages ("j'ai 63 ans", "my dad is 78", "beide 75"), without counting "40 ans d'enseignement";
+- misspelt month names, months standing alone, "Dez/Jan", "February or March" as a choice, a year written once in a range, and an end date when the start is ambiguous;
+- a narrower negation scope, and negative wording that names a diet ("doesn't eat meat", "isst kein Fleisch");
+- budgets written in words;
+- misspelt destination names.
+
+Each rule has tests in English, French and German (362 tests in total). The labels were not changed.
+
+| Language | P | R | F1 | Change from the real number |
+|---|---|---|---|---|
+| English | 0.94 | 0.80 | 0.87 | +0.06 |
+| French | 0.98 | 0.86 | 0.91 | +0.03 |
+| German | 0.99 | 0.89 | 0.93 | +0.07 |
+
+There are now 74 field errors (63 missed, 2 wrong, 9 extra), down from 117:
+
+| Error group | Before | After |
+|---|---|---|
+| Accommodation, interests, special requests, occasion, dietary | 40 | 34 |
+| Travellers | 35 | 19 |
+| Dates | 19 | 5 |
+| Flights | 6 | 6 |
+| Destination | 7 | 3 |
+| Budget | 7 | 4 |
+| Language | 3 | 3 |
+
+These scores are **optimistic**, because the rules were chosen with this set's errors in view. The fair test of these changes is the second held-out set, which colleagues are writing and which will be scored once at the end. On the original gold set the scores did not change (English 0.96, French 0.98, German 0.98; 42 errors), so the new rules did not break anything there.
+
 ### Run 1: before any fixes (the fairer number)
 
 | Language | Enquiries | P | R | F1 | Lenient F1 | Values found where gold was empty |
