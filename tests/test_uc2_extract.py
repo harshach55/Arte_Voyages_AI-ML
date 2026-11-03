@@ -497,3 +497,35 @@ def test_number_words_without_money_context_are_ignored():
 def test_budget_in_words_with_upper_limit():
     b, _, _ = extract_budget("up to thirty thousand dollars")
     assert (b.amount_min, b.amount_max) == (None, 30000)
+
+
+# --- destination typos ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, dest",
+    [
+        ("We are looking at Rajastan for 10 days", ["Rajasthan"]),
+        ("two weeks in Shri Lanka", ["Sri Lanka"]),
+        ("nous rêvons du Keralla", ["Kerala"]),
+        ("im Somer nach Sri Lnka", ["Sri Lanka"]),
+        ("Hochzeitsreise Indien + Maledieven", ["India", "Maldives"]),
+    ],
+)
+def test_destination_typos(text, dest):
+    assert extract_profile(text).destination == dest
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["we love Indian food", "un curry keralan", "Rajasthani textiles", "chez Colombe à Paris"],
+)
+def test_real_words_are_not_read_as_place_typos(text):
+    assert extract_profile(text).destination == []
+
+
+def test_typo_evidence_points_at_the_text():
+    text = "im Somer nach Sri Lnka"
+    p = extract_profile(text)
+    assert check_evidence(p, text) == []
+    assert [e.text for e in p.evidence if e.field == "destination"] == ["Sri Lnka"]

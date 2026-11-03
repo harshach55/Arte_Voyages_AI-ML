@@ -12,6 +12,7 @@ from typing import Optional
 
 from . import lexicon as lx
 from .dates import parse_dates
+from .fuzzy import close_match, word_spans
 from .schema import (
     Budget,
     ClientProfile,
@@ -128,9 +129,36 @@ def extract_occasions(text: str):
     return _to_field(text, hits, "occasion")
 
 
+# plain spellings of each destination, for typo matching ("Sri Lnka", "Maledieven")
+_DESTINATION_FORMS = {}
+for _label, _frags in lx.DESTINATIONS.items():
+    _DESTINATION_FORMS[_label.lower()] = _label
+    for _f in _frags:
+        if re.fullmatch(r"[^\W\d_]+(?: [^\W\d_]+)*", _f):
+            _DESTINATION_FORMS[_f] = _label
+# real words one letter away from a place name; never treat them as typos
+_NOT_TYPOS = {
+    "indian", "indians", "indiana", "rajasthani", "keralan", "keralite", "nepali", "nepalese",
+    "lankan", "ladakhi", "goan", "maldivian", "colombe",
+}
+
+
+def _destination_typos(text: str, exact: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    found = []
+    for s, e, words in word_spans(text, max_words=2):
+        if words.lower() in _NOT_TYPOS or any(s < te and ts < e for ts, te, _ in exact + found):
+            continue
+        form = close_match(words, _DESTINATION_FORMS)
+        if form and not _negated(text, s):
+            found.append((s, e, _DESTINATION_FORMS[form]))
+    return found
+
+
 def extract_destinations(text: str):
+    exact = _lexicon_hits(text, _DESTINATIONS)
+    hits = sorted(exact + _destination_typos(text, exact))
     hits = [
-        (s, e, label) for s, e, label in _lexicon_hits(text, _DESTINATIONS)
+        (s, e, label) for s, e, label in hits
         if not (_ORIGIN_BEFORE.search(text[max(0, s - 25):s]) and not _ROUTE_AFTER.search(text[e:e + 10]))
     ]
     return _to_field(text, hits, "destination")
