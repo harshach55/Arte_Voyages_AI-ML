@@ -24,6 +24,28 @@ python -m src.uc2_extractor.evaluate
 python -m pytest
 ```
 
+### Local API
+
+A small FastAPI app wraps the extractor. It listens on this computer only and never logs or echoes enquiry text.
+
+```
+python app/uc2_api.py
+```
+
+- `GET /health` says whether the optional model is loaded.
+- `POST /extract` takes `{"text": "...", "mode": "rules"}` or `"mode": "rules_model"`. It returns the validated client profile: values, flags, the text each value came from, and whether each value came from a rule or the model.
+- The interactive documentation is at http://127.0.0.1:8001/docs. The page loads its scripts from a public CDN, so it needs internet access.
+
+Example (Git Bash, macOS or Linux):
+
+```
+curl -X POST http://127.0.0.1:8001/extract \
+  -H "Content-Type: application/json" \
+  -d '{"text": "My wife and I want 10 nights in Kerala in March 2027, budget USD 9,000.", "mode": "rules"}'
+```
+
+If the model files are missing, `rules_model` falls back to rules only, and the response says so in `note`. Texts longer than 20,000 characters are refused.
+
 Taskmaster-2 (CC BY 4.0, see Attribution below) was considered as a data source but was not used in the first version. Good English results do not show that the extractor works in French or German.
 
 ## Folder layout

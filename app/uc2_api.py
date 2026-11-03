@@ -1,0 +1,175 @@
+"""Small local API for the travel enquiry extractor.
+
+Run from the project root:
+    python app/uc2_api.py                 (then open http://127.0.0.1:8001/docs)
+    python app/uc2_api.py --port 8002 --no-model
+
+Endpoints:
+    POST /extract   {"text": "...", "mode": "rules" | "rules_model"}
+    GET  /health    whether the model files are loaded
+
+Privacy: the API never logs or echoes enquiry text. Error messages describe
+the problem without repeating the input, and access logging is switched off.
+The server listens on 127.0.0.1 only.
+"""
+
+import argparse
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Callable, Literal, Optional
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from fastapi import FastAPI, Request  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field, field_validator  # noqa: E402
+
+from src.uc2_extractor import semantic  # noqa: E402
+from src.uc2_extractor.extract import extract_profile  # noqa: E402
+from src.uc2_extractor.schema import ClientProfile  # noqa: E402
+
+MAX_CHARS = 20_000
+MAX_BODY_BYTES = 200_000
+
+
+class ExtractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(description="The enquiry, in English, French or German.", max_length=MAX_CHARS)
+    mode: Literal["rules", "rules_model"] = Field(
+        default="rules", description="'rules' (default) or 'rules_model' to add the optional model layer."
+    )
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text is empty")
+        return v
+
+
+class ExtractResponse(BaseModel):
+    mode_requested: Literal["rules", "rules_model"]
+    mode_used: Literal["rules", "rules_model"]
+    note: Optional[str] = Field(default=None, description="Set when the model was requested but not available.")
+    profile: ClientProfile = Field(
+        description="Validated client profile: values, evidence (source text with its position), "
+                    "flags, and provenance (rule or model, with the model's confidence)."
+    )
+
+
+class Health(BaseModel):
+    status: Literal["ok"]
+    model_loaded: bool
+    model_message: str
+    threshold: Optional[float]
+
+
+def _short_errors(exc: RequestValidationError) -> list[str]:
+    """Describe validation errors without repeating the submitted input."""
+    out = []
+    for err in exc.errors():
+        where = ".".join(str(p) for p in err.get("loc", ()) if p != "body") or "body"
+        kind = err.get("type", "")
+        if kind == "string_too_long":
+            msg = f"must be at most {MAX_CHARS} characters"
+        elif kind == "missing":
+            msg = "is required"
+        elif kind == "literal_error":
+            msg = "must be 'rules' or 'rules_model'"
+        elif kind == "extra_forbidden":
+            msg = "is not an accepted field"
+        elif kind in ("json_invalid", "model_attributes_type", "dict_type"):
+            where, msg = "body", "must be a JSON object such as {\"text\": \"...\", \"mode\": \"rules\"}"
+        elif kind == "value_error":
+            msg = str(err.get("ctx", {}).get("error", "is not valid"))
+        else:
+            msg = "is not valid"
+        out.append(f"{where} {msg}")
+    return out
+
+
+def create_app(load_model: bool = True, embedder: Optional[Callable] = None) -> FastAPI:
+    """Build the API. `embedder` replaces the real model (used in tests)."""
+    state = {"embed": None, "message": "model not loaded"}
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if embedder is not None:
+            state["embed"], state["message"] = embedder, "test embedder in use"
+        elif not load_model:
+            state["message"] = "model switched off (--no-model); rules only"
+        else:
+            try:
+                embed = semantic.default_embedder()
+                embed(["warm-up"])
+                state["embed"] = embed
+                state["message"] = f"model loaded (threshold {semantic.DEFAULT_THRESHOLD})"
+            except Exception as exc:  # missing files or packages
+                state["message"] = f"model not available ({type(exc).__name__}); rules only"
+        yield
+
+    app = FastAPI(
+        title="Travel Enquiry Extractor API",
+        version="1.0",
+        description="Turns a free-text travel enquiry (English, French or German) into a validated client "
+                    "profile. Rules only by default; an optional model layer can fill some label fields the "
+                    "rules leave empty. Scored only on synthetic test sets; budget bands are placeholders.",
+        lifespan=lifespan,
+    )
+
+    @app.middleware("http")
+    async def limit_body(request: Request, call_next):
+        size = request.headers.get("content-length")
+        if size is not None and size.isdigit() and int(size) > MAX_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"errors": ["request body is too large"]})
+        return await call_next(request)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError):
+        return JSONResponse(status_code=422, content={"errors": _short_errors(exc)})
+
+    @app.get("/health", response_model=Health)
+    def health() -> Health:
+        return Health(
+            status="ok",
+            model_loaded=state["embed"] is not None,
+            model_message=state["message"],
+            threshold=semantic.DEFAULT_THRESHOLD if state["embed"] is not None else None,
+        )
+
+    @app.post("/extract", response_model=ExtractResponse)
+    def extract(req: ExtractRequest) -> ExtractResponse:
+        note = None
+        mode_used = req.mode
+        if req.mode == "rules_model" and state["embed"] is None:
+            mode_used = "rules"
+            note = "The model is not available, so only the rules were used."
+        model = state["embed"] if mode_used == "rules_model" else False
+        profile = extract_profile(req.text, model=model)
+        return ExtractResponse(mode_requested=req.mode, mode_used=mode_used, note=note, profile=profile)
+
+    return app
+
+
+app = create_app()
+
+
+def main(argv=None) -> int:
+    import uvicorn
+
+    parser = argparse.ArgumentParser(description="Local API for the travel enquiry extractor.")
+    parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--no-model", action="store_true", help="do not load the model (rules only)")
+    args = parser.parse_args(argv)
+    print(f"Travel Enquiry Extractor API at http://127.0.0.1:{args.port}  (docs: /docs)")
+    uvicorn.run(create_app(load_model=not args.no_model), host="127.0.0.1", port=args.port,
+                access_log=False, log_level="warning")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
