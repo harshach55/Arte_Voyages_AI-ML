@@ -69,3 +69,30 @@ def test_detect_language(text, lang):
 @pytest.mark.parametrize("text", ["", "Sri Lanka 2027", "Kerala, Goa, Delhi"])
 def test_detect_language_returns_none_without_signal(text):
     assert detect_language(text) is None
+
+
+# --- short enquiries ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, lang",
+    [
+        ("Two adults, 5 nights in Goa", "en"),
+        ("Deux adultes, 5 nuits à Goa", "fr"),
+        ("Zwei Erwachsene, 5 Nächte in Goa", "de"),
+        ("Wir reisen vom 3/4 bis 10/4, zwei Erwachsene, vegetarisch", "de"),
+        ("Goa, März", "de"),  # no stopwords, the letter ä decides
+        ("Kerala, février", "fr"),  # no stopwords, the letter é decides
+    ],
+)
+def test_detect_language_on_short_enquiries(text, lang):
+    assert detect_language(text) == lang
+
+
+def test_letters_do_not_override_clear_stopwords():
+    # a French place name in an English sentence stays English
+    assert detect_language("We would like to stay at the Hôtel du Lac with our children") == "en"
+
+
+def test_mixed_letters_give_no_answer():
+    assert detect_language("Goa März février") is None
