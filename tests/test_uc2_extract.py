@@ -529,3 +529,14 @@ def test_typo_evidence_points_at_the_text():
     p = extract_profile(text)
     assert check_evidence(p, text) == []
     assert [e.text for e in p.evidence if e.field == "destination"] == ["Sri Lnka"]
+
+
+@pytest.mark.parametrize("text", ["we're both 28. budget 5k", "wir sind beide 28. Budget", "tous les deux 28, merci"])
+def test_age_before_a_full_stop_or_comma(text):
+    t, _, _ = extract_travellers(text)
+    assert t.ages == [28, 28]
+
+
+def test_decimal_number_is_not_an_age():
+    t, _, _ = extract_travellers("both 2.5 stars")
+    assert t.ages == []

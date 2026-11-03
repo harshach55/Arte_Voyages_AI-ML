@@ -315,7 +315,7 @@ _NUMLIST = r"\d{1,2}(?:\s*(?:,|and|&|et|und)\s*\d{1,2})*"
 _NOT_MONTHS = r"(?!\d)(?!\s*(?:months?|mois|monate))"
 # a number followed by these is a count, amount or length, not an age
 _NOT_AGE_AFTER = (
-    r"(?![\d.,]|\s*(?:nights?|days?|weeks?|n[äa]chte|tage|wochen|nuits|jours|semaines|%|k\b|"
+    r"(?!\d|[.,]\d|\s*(?:nights?|days?|weeks?|n[äa]chte|tage|wochen|nuits|jours|semaines|%|k\b|"
     r"people|persons|personnes|personen|adults?|adultes|erwachsene|kids|children|enfants|kinder))"
 )
 _RELATIVE = (
