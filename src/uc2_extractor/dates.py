@@ -14,19 +14,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional
 
 from pydantic import ValidationError
 
-from .lexicon import MONTHS, NUMBER_WORDS, alternation
+from .fuzzy import close_match, word_spans
+from .lexicon import FUZZY_MONTH_FORMS, MONTHS, NUMBER_WORDS, alternation
 from .schema import AmbiguousDate, Duration, Evidence, Flag, PartialDate, TravelDates
 
 _I = re.IGNORECASE
-_MONTH_ALT = alternation(MONTHS)
-
-
-def _month(name: str) -> str:
-    return rf"(?P<{name}>{_MONTH_ALT})\.?(?!\w)"
 
 
 def _day(name: str) -> str:
@@ -45,39 +42,66 @@ _NOT_COUNT = (
     r"personnes|personen|enfants|kinder|erwachsene|stars?))"
 )
 
-PATTERNS = [
-    ("iso", re.compile(r"(?<!\d)(?P<y>20\d{2})-(?P<mo>\d{1,2})-(?P<d>\d{1,2})(?!\d)")),
-    ("range_dm", re.compile(_day("d1") + _TO + _day("d2") + _OF + _month("m") + _YEAR, _I)),
-    ("range_md", re.compile(_month("m") + r"\s+" + _day("d1") + _TO + _day("d2") + _YEAR, _I)),
-    ("single_dm", re.compile(_day("d") + _OF + _month("m") + _YEAR, _I)),
-    ("single_md", re.compile(_month("m") + r"\s+" + _day("d") + _NOT_COUNT + _YEAR, _I)),
-    (
-        "numeric",
-        re.compile(
-            r"(?<![\d.,/])(?P<a>\d{1,2})/(?P<b>\d{1,2})(?:/(?P<y>\d{4}|\d{2}))?"
-            r"(?![\d/])(?!\s*-?\s*(?:stars?|star|étoiles?|sterne|%|k\b))" + _NOT_COUNT,
-            _I,
+_MONTH_PREFIX = (
+    r"(?:\b(?:in|during|early|late|mid|end of|beginning of|start of|en|au mois de|"
+    r"d[ée]but|fin|courant|im|anfang|ende|mitte)\s+|\bmid?-)"
+)
+_ALT = r"\s+(?:or|ou|oder)\s+"
+
+
+@lru_cache(maxsize=32)
+def _build_patterns(month_alt: str) -> list[tuple[str, re.Pattern]]:
+    def month(name: str) -> str:
+        return rf"(?P<{name}>{month_alt})\.?(?!\w)"
+
+    return [
+        ("iso", re.compile(r"(?<!\d)(?P<y>20\d{2})-(?P<mo>\d{1,2})-(?P<d>\d{1,2})(?!\d)")),
+        ("range_dm", re.compile(_day("d1") + _TO + _day("d2") + _OF + month("m") + _YEAR, _I)),
+        ("range_md", re.compile(month("m") + r"\s+" + _day("d1") + _TO + _day("d2") + _YEAR, _I)),
+        ("single_dm", re.compile(_day("d") + _OF + month("m") + _YEAR, _I)),
+        ("single_md", re.compile(month("m") + r"\s+" + _day("d") + _NOT_COUNT + _YEAR, _I)),
+        (
+            "numeric",
+            re.compile(
+                r"(?<![\d.,/])(?P<a>\d{1,2})/(?P<b>\d{1,2})(?:/(?P<y>\d{4}|\d{2}))?"
+                r"(?![\d/])(?!\s*-?\s*(?:stars?|star|étoiles?|sterne|%|k\b))" + _NOT_COUNT,
+                _I,
+            ),
         ),
-    ),
-    (
-        # German style 15.03. or 15.03.2027 (a trailing dot belongs to the date)
-        "numeric",
-        re.compile(
-            r"(?<![\d.,/])(?P<a>\d{1,2})\.(?P<b>\d{1,2})(?:\.(?P<y>\d{4}|\d{2})|\.)?"
-            r"(?![\d/])(?!\s*-?\s*(?:stars?|star|étoiles?|sterne|%|k\b))" + _NOT_COUNT,
-            _I,
+        (
+            # German style 15.03. or 15.03.2027 (a trailing dot belongs to the date)
+            "numeric",
+            re.compile(
+                r"(?<![\d.,/])(?P<a>\d{1,2})\.(?P<b>\d{1,2})(?:\.(?P<y>\d{4}|\d{2})|\.)?"
+                r"(?![\d/])(?!\s*-?\s*(?:stars?|star|étoiles?|sterne|%|k\b))" + _NOT_COUNT,
+                _I,
+            ),
         ),
-    ),
-    (
-        "month_only",
-        re.compile(
-            r"(?:\b(?:in|during|early|late|mid|end of|beginning of|start of|en|au mois de|"
-            r"début|fin|courant|im|anfang|ende|mitte)\s+|\bmid?-)" + _month("m") + _YEAR,
-            _I,
-        ),
-    ),
-    ("month_year", re.compile(_month("m") + r"\s+(?P<y>20\d{2})(?!\d)", _I)),
-]
+        # "February or March": a choice between months, so no date is taken
+        ("month_alt", re.compile(rf"(?:{_MONTH_PREFIX})?{month('m')}{_ALT}(?:{_MONTH_PREFIX})?{month('m2')}", _I)),
+        # "Dez/Jan": a trip across two months
+        ("month_range", re.compile(rf"{month('m')}\s*/\s*{month('m2')}{_YEAR}", _I)),
+        ("month_only", re.compile(_MONTH_PREFIX + month("m") + _YEAR, _I)),
+        ("month_year", re.compile(month("m") + r"\s+(?P<y>20\d{2})(?!\d)", _I)),
+        # a month standing on its own between punctuation: "2 Pers., März." / "Novembre, deux semaines"
+        ("month_alone", re.compile(rf"(?:^|(?<=[,.;:(\n]))\s*{month('m')}(?=\s*(?:[,.;:)!?]|$))", _I | re.M)),
+    ]
+
+
+PATTERNS = _build_patterns(alternation(MONTHS))
+
+# words that clearly mark a single date as the end of the trip ("departing"
+# and "leaving" are left out: they can also mean the day the trip starts)
+_END_WORD_BEFORE = re.compile(
+    r"\b(?:abreise|rückreise|rückflug|heimreise|return(?:ing)?|retour|until|bis|jusqu'au)\b[^.;\n]{0,12}$",
+    _I,
+)
+# "to Sunday 21 November 2027" between two dates: a range connector
+_RANGE_JOIN = re.compile(
+    r"\s*(?:-|–|—|to|till|until|through|au|à|jusqu'au|bis zum|bis)\s+(?:(?:the|le|zum|den)\s+)?"
+    r"(?:[^\W\d_]+\s+)?",
+    _I,
+)
 
 # ---------------------------------------------------------------------------
 # Durations
@@ -147,17 +171,31 @@ def _pd(day, month, year=None) -> Optional[PartialDate]:
         return None
 
 
-def _to_mention(kind: str, m: re.Match) -> Optional[_Mention]:
+def _to_mention(kind: str, m: re.Match, months: dict[str, int] = MONTHS) -> Optional[_Mention]:
     g = m.groupdict()
     year = _year(g.get("y"))
     base = dict(start=m.start(), end=m.end(), text=m.group())
+
+    if kind == "month_alt":
+        return _Mention("alternative", **base)
+
+    if kind == "month_range":
+        first = PartialDate(year=None, month=months[g["m"].lower()])
+        last = PartialDate(year=year, month=months[g["m2"].lower()])
+        return _Mention("range", first=first, last=last, **base)
+
+    if kind == "month_alone":
+        # keep only the month itself as the evidence, not the spaces before it
+        s = m.start("m")
+        return _Mention("month", first=PartialDate(month=months[g["m"].lower()]),
+                        start=s, end=m.end(), text=m.string[s:m.end()])
 
     if kind == "iso":
         d = _pd(int(g["d"]), int(g["mo"]), year)
         return _Mention("date", first=d, **base) if d else None
 
     if kind in ("range_dm", "range_md"):
-        month = MONTHS[g["m"].lower()]
+        month = months[g["m"].lower()]
         first = _pd(int(g["d1"]), month, year)
         last = _pd(int(g["d2"]), month, year)
         if first and last and first.day < last.day:
@@ -165,7 +203,7 @@ def _to_mention(kind: str, m: re.Match) -> Optional[_Mention]:
         return None
 
     if kind in ("single_dm", "single_md"):
-        d = _pd(int(g["d"]), MONTHS[g["m"].lower()], year)
+        d = _pd(int(g["d"]), months[g["m"].lower()], year)
         return _Mention("date", first=d, **base) if d else None
 
     if kind == "numeric":
@@ -184,20 +222,35 @@ def _to_mention(kind: str, m: re.Match) -> Optional[_Mention]:
         return _Mention("date", first=d, **base) if d else None
 
     if kind in ("month_only", "month_year"):
-        d = PartialDate(year=year, month=MONTHS[g["m"].lower()])
+        d = PartialDate(year=year, month=months[g["m"].lower()])
         return _Mention("month", first=d, **base)
 
     return None
 
 
+def _month_typos(text: str) -> dict[str, int]:
+    """Misspelt month names in the text, e.g. {'novmber': 11}."""
+    typos = {}
+    for _, _, word in word_spans(text, max_words=1):
+        if word.lower() in MONTHS:
+            continue
+        form = close_match(word, FUZZY_MONTH_FORMS)
+        if form:
+            typos[word.lower()] = FUZZY_MONTH_FORMS[form]
+    return typos
+
+
 def _find_mentions(text: str) -> list[_Mention]:
+    typos = _month_typos(text)
+    months = {**MONTHS, **typos}
+    patterns = _build_patterns(alternation(months)) if typos else PATTERNS
     taken: list[tuple[int, int]] = []
     mentions = []
-    for kind, pattern in PATTERNS:
+    for kind, pattern in patterns:
         for m in pattern.finditer(text):
             if any(m.start() < e and s < m.end() for s, e in taken):
                 continue
-            mention = _to_mention(kind, m)
+            mention = _to_mention(kind, m, months)
             if mention:
                 taken.append((m.start(), m.end()))
                 mentions.append(mention)
@@ -250,6 +303,9 @@ def parse_dates(text: str) -> DateResult:
     days = [m for m in mentions if m.kind == "date"]
     months = [m for m in mentions if m.kind == "month"]
     ambiguous = [m for m in mentions if m.kind == "ambiguous"]
+    for alt in (m for m in mentions if m.kind == "alternative"):
+        # "February or March": a choice between months, not a date
+        flags.append(Flag(field="dates", kind="ambiguous", message=f"alternative dates: '{alt.text}'"))
 
     used: list[_Mention] = []
     start = end = None
@@ -265,9 +321,23 @@ def parse_dates(text: str) -> DateResult:
         flags.append(Flag(field="dates", kind="ambiguous",
                           message=f"alternative dates: '{text[used[0].start:used[1].end]}'"))
         used = []
-    if not ranges and used:
+    if not ranges and len(used) == 1 and used[0].kind == "date":
+        only = used[0]
+        before = text[max(0, only.start - 25):only.start]
+        # "5/11 ... 19/11" (start unclear) or "Abreise 18.5.": this date is the end
+        if any(a.start < only.start for a in ambiguous) or _END_WORD_BEFORE.search(before):
+            end = only.first
+        else:
+            start = only.first
+    elif not ranges and used:
         start = used[0].first
         end = used[1].first if len(used) > 1 else None
+        # "8 November to 21 November 2027": the year written once covers both ends
+        if (len(used) == 2 and start and end and start.year is None and end.year is not None
+                and _RANGE_JOIN.fullmatch(text[used[0].end:used[1].start])):
+            with_year = start.model_copy(update={"year": end.year})
+            if (with_year.month, with_year.day or 0) <= (end.month, end.day or 99):
+                start = with_year
 
     for m in ambiguous:
         readings = ", ".join(r.to_str() for r in m.readings)

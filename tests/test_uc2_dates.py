@@ -212,3 +212,110 @@ def test_alternative_months_are_not_a_range():
 def test_mid_month_with_hyphen():
     r = parse_dates("late January to mid-February")
     assert (s(r.dates.start), s(r.dates.end)) == ("--01", "--02")
+
+
+# --- general date rules added after the first held-out run -------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, start",
+    [
+        ("We want to go in Novmber for ten days", "--11"),
+        ("Départ prévu en septmbre, deux semaines", "--09"),
+        ("Wir reisen im Dezmber", "--12"),
+        ("arriving 3 Febuary", "--02-03"),
+    ],
+)
+def test_misspelt_month_names(text, start):
+    assert s(parse_dates(text).dates.start) == start
+
+
+def test_short_month_words_are_not_typo_matched():
+    # "marche" (French: walk) is one letter away from "march"
+    assert parse_dates("une petite marche le matin").dates.start is None
+
+
+@pytest.mark.parametrize(
+    "text, start",
+    [
+        ("Maldives, 2 people, March. Budget 10k", "--03"),
+        ("Novembre, deux semaines.", "--11"),
+        ("Malediven, 2 Pers., März. Budget 20.000 €", "--03"),
+    ],
+)
+def test_month_standing_alone(text, start):
+    assert s(parse_dates(text).dates.start) == start
+
+
+def test_month_inside_a_sentence_without_punctuation_is_not_taken():
+    assert parse_dates("We may come back").dates.start is None
+
+
+@pytest.mark.parametrize("text", ["début mars", "debut mars", "Fin janvier"])
+def test_french_month_prefix_with_or_without_accent(text):
+    assert parse_dates(text).dates.start is not None
+
+
+@pytest.mark.parametrize(
+    "text, start, end",
+    [
+        ("Dec/Jan, 3 weeks", "--12", "--01"),
+        ("déc/janv, trois semaines", "--12", "--01"),
+        ("Dez/Jan, 3 Wochen", "--12", "--01"),
+    ],
+)
+def test_month_slash_month_is_a_range(text, start, end):
+    r = parse_dates(text)
+    assert (s(r.dates.start), s(r.dates.end)) == (start, end)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["three weeks in February or March", "en février ou mars", "im Februar oder März"],
+)
+def test_choice_of_months_gives_no_date(text):
+    r = parse_dates(text)
+    assert r.dates.start is None and r.dates.end is None
+    assert any("alternative" in f.message for f in r.flags)
+
+
+@pytest.mark.parametrize(
+    "text, start, end",
+    [
+        ("from Monday 8 November to Sunday 21 November 2027", "2027-11-08", "2027-11-21"),
+        ("du 28 mars au 4 avril 2027", "2027-03-28", "2027-04-04"),
+        ("vom 28. März bis 4. April 2027", "2027-03-28", "2027-04-04"),
+    ],
+)
+def test_year_written_once_covers_both_ends(text, start, end):
+    r = parse_dates(text)
+    assert (s(r.dates.start), s(r.dates.end)) == (start, end)
+
+
+def test_year_is_not_carried_back_over_new_year():
+    r = parse_dates("from 20 December to 5 January 2027")
+    assert (s(r.dates.start), s(r.dates.end)) == ("--12-20", "2027-01-05")
+
+
+@pytest.mark.parametrize(
+    "text, end",
+    [
+        ("Arriving 5/11, leaving 19/11", "--11-19"),
+        ("Arrivée le 5/11, départ le 19/11", "--11-19"),
+        ("Anreise 4.5., Abreise 18.5.", "--05-18"),
+    ],
+)
+def test_clear_date_after_an_ambiguous_one_is_the_end(text, end):
+    r = parse_dates(text)
+    assert r.dates.start is None
+    assert s(r.dates.end) == end
+    assert len(r.dates.ambiguous) == 1
+
+
+@pytest.mark.parametrize(
+    "text, end",
+    [("returning on 18 May", "--05-18"), ("retour le 18 mai", "--05-18"), ("Rückreise am 18. Mai", "--05-18")],
+)
+def test_single_date_with_an_end_word_is_the_end(text, end):
+    r = parse_dates(text)
+    assert r.dates.start is None and s(r.dates.end) == end

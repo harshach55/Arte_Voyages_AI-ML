@@ -25,7 +25,13 @@ MONTHS = {
     # German
     "januar": 1, "jänner": 1, "februar": 2, "märz": 3, "maerz": 3, "juni": 6,
     "juli": 7, "oktober": 10, "dezember": 12,
+    # common French and German abbreviations
+    "janv": 1, "févr": 2, "fevr": 2, "fév": 2, "avr": 4, "juil": 7, "déc": 12,
+    "okt": 10, "dez": 12,
 }
+# full month names long enough for typo matching ("Novmber"); shorter names
+# such as "march" are left out because "marche" (French: walk) is one edit away
+FUZZY_MONTH_FORMS = {name: num for name, num in MONTHS.items() if len(name) >= 6}
 
 # ---------------------------------------------------------------------------
 # Small numbers written as words
