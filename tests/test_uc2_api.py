@@ -80,7 +80,7 @@ def test_extract_with_model_marks_model_values():
     [
         ({"text": "   "}, "text text is empty"),
         ({"text": "a" * 20001}, "text must be at most 20000 characters"),
-        ({"text": "Kerala", "mode": "fast"}, "mode must be 'rules', 'rules_model' or 'rules_tagger'"),
+        ({"text": "Kerala", "mode": "fast"}, "mode must be 'rules', 'rules_model', 'rules_tagger' or 'rules_tagger_v2'"),
         ({"mode": "rules"}, "text is required"),
         ({"text": "Kerala", "colour": "red"}, "colour is not an accepted field"),
     ],
@@ -157,3 +157,51 @@ def test_other_modes_do_not_use_the_tagger():
     with TestClient(api.create_app(load_model=False, crf_tagger=FakeTagger())) as c:
         body = c.post("/extract", json={"text": "We would like to see Zanzibar", "mode": "rules"}).json()
     assert body["profile"]["destination"] == []
+
+
+# --- batch -------------------------------------------------------------------------------------
+
+
+def test_batch_returns_one_profile_per_text_in_order(rules_client):
+    texts = ["Two weeks in Kerala in March", "Malediven, 10 Nächte, 2 Pers.", "Nous partons au Népal en octobre"]
+    r = rules_client.post("/extract/batch", json={"texts": texts})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 3 and body["mode_used"] == "rules"
+    profiles = [api.ClientProfile.model_validate(p) for p in body["profiles"]]
+    assert [p.destination for p in profiles] == [["Kerala"], ["Maldives"], ["Nepal"]]
+    assert [p.language for p in profiles] == ["en", "de", "fr"]
+
+
+def test_batch_with_the_tagger_marks_crf_values():
+    with TestClient(api.create_app(load_model=False, crf_tagger=FakeTagger(), crf_tagger_v2=FakeTagger())) as c:
+        assert c.get("/health").json()["tagger_v2_loaded"] is True
+        body = c.post("/extract/batch", json={"texts": ["We would like to see Zanzibar"], "mode": "rules_tagger_v2"}).json()
+    assert body["mode_used"] == "rules_tagger_v2"
+    assert body["profiles"][0]["destination"] == ["Zanzibar"]
+
+
+def test_batch_falls_back_to_rules_without_the_new_tagger():
+    with TestClient(api.create_app(load_model=False, load_tagger=False)) as c:
+        body = c.post("/extract/batch", json={"texts": [ENQUIRY], "mode": "rules_tagger_v2"}).json()
+    assert body["mode_used"] == "rules" and "not available" in body["note"]
+
+
+@pytest.mark.parametrize("payload, expected", [
+    ({"texts": []}, "texts must have at least one text"),
+    ({"texts": ["Kerala"] * 51}, "texts must have at most 50 texts"),
+    ({"texts": ["Kerala", "x" * 20_001]}, "texts.1 must be at most 20000 characters"),
+    ({"texts": "Kerala"}, "texts must be a list of texts"),
+    ({"texts": ["Kerala", "   "]}, "texts text number 1 is empty (counting from 0)"),
+])
+def test_batch_rejects_bad_input_without_echoing_it(rules_client, payload, expected):
+    r = rules_client.post("/extract/batch", json=payload)
+    assert r.status_code == 422
+    errors = r.json()["errors"]
+    assert expected in errors
+    assert "Kerala" not in " ".join(errors) and "xxxx" not in " ".join(errors)
+
+
+def test_batch_of_fifty_long_texts_is_accepted_by_the_size_limit(rules_client):
+    r = rules_client.post("/extract/batch", json={"texts": ["Kerala in March. " * 1100] * 50})
+    assert r.status_code == 200 and r.json()["count"] == 50
