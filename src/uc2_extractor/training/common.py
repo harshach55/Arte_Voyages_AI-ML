@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from ..text import tokenize
 from .dedupe import ProtectedIndex, normalise
@@ -42,6 +42,22 @@ def ignored(text: str, start: int, end: int) -> dict:
     return {"start": start, "end": end, "text": text[start:end]}
 
 
+def reject_reason(example: dict, index: ProtectedIndex, seen: set[str]) -> Optional[str]:
+    """Why this example must be dropped, or None. Accepted examples are added to `seen`."""
+    try:
+        validate_example(example)
+    except ExampleError:
+        return "failed_validation"
+    close = index.check(example["text"])
+    if close:
+        return f"too_close_to_test_text:{close}"
+    key = example["language"] + " " + normalise(example["text"])
+    if key in seen:
+        return "exact_repeat"
+    seen.add(key)
+    return None
+
+
 def finish(examples: Iterable[dict], index: ProtectedIndex) -> tuple[list[dict], Counter]:
     """Keep the examples that pass every check, and count why the others were dropped.
 
@@ -52,21 +68,11 @@ def finish(examples: Iterable[dict], index: ProtectedIndex) -> tuple[list[dict],
     dropped: Counter = Counter()
     seen: set[str] = set()
     for example in examples:
-        try:
-            validate_example(example)
-        except ExampleError:
-            dropped["failed_validation"] += 1
-            continue
-        reason = index.check(example["text"])
+        reason = reject_reason(example, index, seen)
         if reason:
-            dropped[f"too_close_to_test_text:{reason}"] += 1
-            continue
-        key = example["language"] + " " + normalise(example["text"])
-        if key in seen:
-            dropped["exact_repeat"] += 1
-            continue
-        seen.add(key)
-        kept.append(example)
+            dropped[reason] += 1
+        else:
+            kept.append(example)
     return kept, dropped
 
 

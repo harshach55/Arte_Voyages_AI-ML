@@ -4,7 +4,7 @@ This describes the data used to train the slot tagger. The data is not stored in
 
 ## 1. Summary
 
-The tagger was trained on two public datasets, converted to our labels. No client messages were used. No synthetic data was used: the synthetic generator is unfinished and was skipped.
+The first tagger (v1) was trained on two public datasets, converted to our labels. The second tagger (v2) also uses 900 synthetic enquiries from our own generator (section 9). No client messages were used anywhere.
 
 ## 2. Sources
 
@@ -104,3 +104,15 @@ Fingerprints of the converted files are in `models/uc2_crf/crf_tagger.json`.
 - How much speech recognition noise Taskmaster-2 has; it was seen but not measured.
 - Why the MASSIVE card's row count differs from the data files.
 - Near-duplicates between the training and development parts of the same source were not removed, apart from exact repeats.
+
+## 9. Synthetic enquiries (pilot, used by the second tagger)
+
+- **What:** 900 enquiries, 300 per language (English, French and German), written by the generator in `src/uc2_extractor/training/synth/`. Seed 20261106, so running it again gives the same data.
+- **Labels:** known by construction. Every value is placed into the text by the generator, so its position is exact. Every example is checked the same way as the public data (spans match the text, BIO round trip).
+- **Fields covered:** destination, dates, trip length, party, adults, children, ages, budget, accommodation, flights, origin, interests, dietary needs, occasion and special requests.
+- **Styles:** short notes (like a quick message), medium web-form messages and long formal emails. Fields come in a random order, some have typos, numbers are written as words or digits, and some details are missing. Texts also contain things that look like a field but are not: past trips, home towns, other dates and other amounts.
+- **No real people or real text:** names are invented, and no sentence was copied from a test set or a client message.
+- **Kept away from test text:** each enquiry was checked against the gold set, held-out set 1 and the corrections with the same hash rules as in section 5, and 14 drafts were rejected. The wording was written by someone who had read the gold set and held-out set 1, so those two sets are no longer blind for anything trained on this data. Only held-out set 2 is blind.
+- **Split:** by a hash of the enquiry id: 720 training, 79 development, 101 test (test: en 43, fr 30, de 28). The test part is never used for training or tuning.
+- **Not checked by a native speaker:** the French and German text has not been checked by a native speaker yet.
+- **Limits:** the phrases come from fixed word lists, so the variety is smaller than in real email. Scores on the synthetic test split are optimistic for that reason.
