@@ -8,7 +8,8 @@ INFO = {
     "mode": "Rules only uses hand-written rules. Rules + model adds a small pretrained model that fills gaps, "
             "only when it is very confident (0.88 or more). Rules + tagger adds a tagger we trained on public "
             "data to fill gaps. Rules + new tagger uses a tagger also trained on synthetic enquiries, so it knows "
-            "more fields.",
+            "more fields. The field-selective version only lets it fill the fields where it beat the rules on the "
+            "gold set.",
     "mode_highlight": "This page uses hand-written rules, and a tagger we trained on public data fills gaps the "
                       "rules leave.",
     "comparison": "Old tagger: trained on public data only. New tagger: also trained on synthetic enquiries. "

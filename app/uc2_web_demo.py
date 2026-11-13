@@ -339,7 +339,8 @@ def build_response(text: str, use_model: bool, use_tagger: bool = False) -> dict
 
 
 def handle_save(data: Optional[dict], model_available: bool, path: Path = CORRECTIONS_FILE,
-                tagger_available: bool = False, tagger2_available: bool = False) -> tuple[int, dict]:
+                tagger_available: bool = False, tagger2_available: bool = False,
+                tagger2s_available: bool = False) -> tuple[int, dict]:
     """Save one correction. The extracted profile is recomputed from the text on
     the server, so the saved 'extracted' part cannot be altered in the browser."""
     if not isinstance(data, dict):
@@ -351,7 +352,8 @@ def handle_save(data: Optional[dict], model_available: bool, path: Path = CORREC
     if not isinstance(corrected, dict) or not all(isinstance(v, str) for v in corrected.values()):
         return 400, {"error": "'corrected' must map field names to text values"}
     use_model = data.get("mode") == "model" and model_available
-    use_tagger = ("v2" if data.get("mode") == "tagger2" and tagger2_available
+    use_tagger = ("v2_selective" if data.get("mode") == "tagger2s" and tagger2s_available
+                  else "v2" if data.get("mode") == "tagger2" and tagger2_available
                   else data.get("mode") == "tagger" and tagger_available)
     extracted = extract_profile(text, model=use_model, tagger=use_tagger)
     try:
@@ -488,6 +490,7 @@ __INFO_CSS__
       <label><input type="radio" name="mode" value="rules" checked> rules only</label>
       <label id="tagger-choice"><input type="radio" name="mode" value="tagger"> rules + trained tagger</label>
       <label id="tagger2-choice"><input type="radio" name="mode" value="tagger2"> rules + new tagger</label>
+      <label id="tagger2s-choice"><input type="radio" name="mode" value="tagger2s"> rules + new tagger (field-selective)</label>
       <label id="model-choice"><input type="radio" name="mode" value="model"> rules + model</label>
     </span>
   </div>
@@ -573,6 +576,7 @@ const PIPELINE = __PIPELINE__;
 const COMPONENTS = __COMPONENTS__;
 const COMPARISON = __COMPARISON__;
 const TAGGER2 = __TAGGER2__;
+const TAGGER2S = __TAGGER2S__;
 const ALL_FIELDS = __ALL_FIELDS__;
 let lastSingle = null;
 let lastBatch = null;
@@ -611,6 +615,10 @@ function itemList(items) {
 // model status and toggle
 const status = document.getElementById("model-status");
 status.textContent = MODEL.message + " " + TAGGER.message + " " + TAGGER2.message;
+if (!TAGGER2S.available) {
+  document.querySelector('#tagger2s-choice input').disabled = true;
+  document.getElementById("tagger2s-choice").title = "Field list not found";
+}
 if (!TAGGER2.available) {
   status.className = "notice warn";
   document.querySelector('#tagger2-choice input').disabled = true;
@@ -631,11 +639,18 @@ function simpleTable(head, rows) {
   return table;
 }
 const MODE_NAMES = {"rules only": "Rules only", "v1 only": "Old tagger only", "v2 only": "New tagger only",
-                    "rules + v1": "Rules + old tagger", "rules + v2": "Rules + new tagger"};
+                    "rules + v1": "Rules + old tagger", "rules + v2": "Rules + new tagger",
+                    "rules + v2 selective": "Rules + new tagger (field-selective)"};
 const compBox = document.getElementById("comparison");
 if (!COMPARISON) {
   compBox.appendChild(el("p", "No comparison yet. Run: python -m src.uc2_extractor.training.compare_taggers", "small"));
 } else {
+  if (COMPARISON.selection) {
+    const chosen = COMPARISON.selection.chosen;
+    compBox.appendChild(el("p", "Field-selective mode: fields where the new tagger beat the rules on the gold set (" +
+      COMPARISON.selection.decided_on + "): " + (chosen.length ? chosen.join(", ") :
+      "none, so this mode gives the same values as rules only") + ".", "small"));
+  }
   compBox.appendChild(el("h3", "Training data (examples in the training part)"));
   const t = COMPARISON.training;
   const keys = [...new Set(Object.keys(t.v1.train).concat(Object.keys(t.v2.train)))].sort();
@@ -964,7 +979,8 @@ async function extract() {
   if (!text) { statusLine.textContent = "Please paste an enquiry first."; return; }
   const useModel = choice("mode") === "model" && MODEL.available;
   const useTagger = choice("mode") === "tagger" && TAGGER.available ? "v1"
-                  : choice("mode") === "tagger2" && TAGGER2.available ? "v2" : false;
+                  : choice("mode") === "tagger2" && TAGGER2.available ? "v2"
+                  : choice("mode") === "tagger2s" && TAGGER2S.available ? "v2_selective" : false;
   statusLine.textContent = "Extracting\\u2026";
   statusLine.className = "";
   try {
@@ -973,10 +989,12 @@ async function extract() {
       showBatch((await post("/extract_batch", {texts, model: useModel, tagger: useTagger})).rows);
     } else {
       const data = await post("/extract", {text, model: useModel, tagger: useTagger});
-      lastRequest = {text, mode: useTagger === "v2" ? "tagger2" : useTagger ? "tagger" : useModel ? "model" : "rules"};
+      lastRequest = {text, mode: useTagger === "v2_selective" ? "tagger2s" : useTagger === "v2" ? "tagger2"
+                                 : useTagger ? "tagger" : useModel ? "model" : "rules"};
       showSingle(data);
     }
-    statusLine.textContent = "Mode used: " + (useTagger === "v2" ? "rules + new tagger" : useTagger ? "rules + trained tagger"
+    statusLine.textContent = "Mode used: " + (useTagger === "v2_selective" ? "rules + new tagger (field-selective)"
+                                               : useTagger === "v2" ? "rules + new tagger" : useTagger ? "rules + trained tagger"
                                                : useModel ? "rules + model" : "rules only");
   } catch (err) {
     statusLine.textContent = "Error: " + err.message;
@@ -1003,7 +1021,8 @@ def _script_json(data) -> str:
 
 def render_page(samples: list[dict], model_available: bool, model_message: str,
                 tagger_available: bool = False, tagger_message: str = "Trained tagger not loaded.",
-                tagger2_available: bool = False, tagger2_message: str = "New tagger not loaded.") -> bytes:
+                tagger2_available: bool = False, tagger2_message: str = "New tagger not loaded.",
+                tagger2s_available: bool = False) -> bytes:
     page = PAGE.replace("__SAMPLES__", _script_json(samples))
     page = page.replace("__SCORES__", _script_json(SCORES))
     page = page.replace("__MODEL__", _script_json({"available": model_available, "message": model_message}))
@@ -1014,6 +1033,7 @@ def render_page(samples: list[dict], model_available: bool, model_message: str,
     page = page.replace("__COMPONENTS__", _script_json(components(tagger_available, tagger2_available)))
     page = page.replace("__COMPARISON__", _script_json(load_comparison()))
     page = page.replace("__TAGGER2__", _script_json({"available": tagger2_available, "message": tagger2_message}))
+    page = page.replace("__TAGGER2S__", _script_json({"available": tagger2s_available}))
     page = page.replace("__ALL_FIELDS__", _script_json(list(ALL_FIELDS)))
     page = page.replace("__KIND_NAMES__", _script_json(KIND_NAMES))
     return page.encode("utf-8")
@@ -1024,12 +1044,15 @@ class Handler(BaseHTTPRequestHandler):
     model_available: bool = False
     tagger_available: bool = False
     tagger2_available: bool = False
+    tagger2s_available: bool = False
     corrections_path: Path = CORRECTIONS_FILE
 
     def tagger_choice(self, value):
         """The tagger a request asked for, if it is loaded: "v2", True for the first one, or False."""
         if value == "v2":
             return "v2" if self.tagger2_available else False
+        if value == "v2_selective":
+            return "v2_selective" if self.tagger2s_available else False
         return bool(value) and self.tagger_available
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
@@ -1087,7 +1110,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"rows": build_batch(texts, use_model, self.tagger_choice(data.get("tagger")))})
         elif self.path == "/save_correction":
             status, body = handle_save(self._read_json(MAX_CHARS * 8), self.model_available, self.corrections_path,
-                                       self.tagger_available, self.tagger2_available)
+                                       self.tagger_available, self.tagger2_available, self.tagger2s_available)
             self._json(status, body)
         else:
             self._json(404, {"error": "not found"})
@@ -1114,16 +1137,19 @@ def main(argv=None) -> int:
     if args.no_tagger:
         tagger_available, tagger_message = False, "Trained tagger switched off (--no-tagger)."
         tagger2_available, tagger2_message = False, "New tagger switched off (--no-tagger)."
+        tagger2s_available = False
     else:
         tagger_available, tagger_message = check_tagger()
         tagger2_available, tagger2_message = check_tagger("v2")
+        tagger2s_available = check_tagger("v2_selective")[0]
     gold = load_gold_sample()
     Handler.model_available = model_available
     Handler.tagger_available = tagger_available
     Handler.tagger2_available = tagger2_available
+    Handler.tagger2s_available = tagger2s_available
     Handler.corrections_path = args.corrections
     Handler.page = render_page(SAMPLES + [gold], model_available, model_message, tagger_available, tagger_message,
-                               tagger2_available, tagger2_message)
+                               tagger2_available, tagger2_message, tagger2s_available)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Travel Enquiry Extractor demo running at http://localhost:{args.port}")
     print(model_message)

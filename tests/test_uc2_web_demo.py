@@ -262,3 +262,16 @@ def test_page_script_has_no_raw_line_breaks_inside_strings():
     script = page.split("<script>", 1)[1]
     assert "\r" not in script
     assert 'join("\\r\\n")' in script  # the CSV line break stays an escape in the page
+
+
+def test_page_offers_the_field_selective_mode():
+    page = demo.render_page(demo.SAMPLES, False, "x", True, "y", True, "z", True).decode("utf-8")
+    assert 'value="tagger2s"' in page and "rules + new tagger (field-selective)" in page
+
+
+def test_handler_field_selective_choice_needs_its_list():
+    handler = object.__new__(demo.Handler)
+    handler.tagger_available, handler.tagger2_available, handler.tagger2s_available = True, True, False
+    assert handler.tagger_choice("v2_selective") is False
+    handler.tagger2s_available = True
+    assert handler.tagger_choice("v2_selective") == "v2_selective"

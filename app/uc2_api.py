@@ -39,10 +39,11 @@ MAX_CHARS = 20_000
 MAX_BODY_BYTES = 200_000
 MAX_BATCH = 50
 MAX_BATCH_BODY_BYTES = MAX_BATCH * MAX_CHARS * 4 + 10_000
-Mode = Literal["rules", "rules_model", "rules_tagger", "rules_tagger_v2"]
+Mode = Literal["rules", "rules_model", "rules_tagger", "rules_tagger_v2", "rules_tagger_v2_selective"]
 MODE_HELP = ("'rules' (default), 'rules_model' to add the optional model layer, 'rules_tagger' to let the first "
-             "trained tagger fill what the rules left empty, or 'rules_tagger_v2' for the second tagger, also "
-             "trained on synthetic enquiries.")
+             "trained tagger fill what the rules left empty, 'rules_tagger_v2' for the second tagger, also "
+             "trained on synthetic enquiries, or 'rules_tagger_v2_selective' for the second tagger limited to the "
+             "fields where it beat the rules on the gold set.")
 
 
 class ExtractRequest(BaseModel):
@@ -117,12 +118,14 @@ class RateResponse(BaseModel):
     low: float = Field(description="10th percentile model")
     high: float = Field(description="90th percentile model")
     currency: Literal["EUR"]
+    range_method: str = Field(default="raw", description="'calibrated' (conformal) or 'raw' quantile models")
     note: str
     seasonality: Optional[list[MonthRate]] = None
 
 
 RATE_NOTE = ("Reference rate from two Portuguese hotels, 2015-2016 price levels. Not a quote, and not South Asian "
-             "luxury hotels. The 10-90% range is where most similar bookings fell, not a guarantee.")
+             "luxury hotels. The 10-90% range is calibrated to hold about 80% of 2016 bookings; on 2017 bookings it "
+             "held less, so it is not a guarantee.")
 
 
 class ExtractResponse(BaseModel):
@@ -144,6 +147,7 @@ class Health(BaseModel):
     tagger_message: str
     tagger_v2_loaded: bool
     tagger_v2_message: str
+    tagger_v2_selective_loaded: bool
     rate_model_loaded: bool
 
 
@@ -164,7 +168,7 @@ def _short_errors(exc: RequestValidationError) -> list[str]:
         elif kind == "missing":
             msg = "is required"
         elif kind == "literal_error":
-            msg = "must be 'rules', 'rules_model', 'rules_tagger' or 'rules_tagger_v2'"
+            msg = "must be 'rules', 'rules_model', 'rules_tagger', 'rules_tagger_v2' or 'rules_tagger_v2_selective'"
         elif kind == "extra_forbidden":
             msg = "is not an accepted field"
         elif kind in ("json_invalid", "model_attributes_type", "dict_type"):
@@ -178,10 +182,10 @@ def _short_errors(exc: RequestValidationError) -> list[str]:
 
 
 def create_app(load_model: bool = True, embedder: Optional[Callable] = None, load_tagger: bool = True,
-               crf_tagger=None, crf_tagger_v2=None, load_rates: bool = True) -> FastAPI:
+               crf_tagger=None, crf_tagger_v2=None, load_rates: bool = True, crf_tagger_v2_selective=None) -> FastAPI:
     """Build the API. `embedder` and the `crf_tagger` arguments replace the real ones (used in tests)."""
     state = {"embed": None, "message": "model not loaded", "tagger": None, "tagger_message": "tagger not loaded",
-             "tagger_v2": None, "tagger_v2_message": "new tagger not loaded", "rates": False}
+             "tagger_v2": None, "tagger_v2_message": "new tagger not loaded", "tagger_v2s": None, "rates": False}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -209,6 +213,11 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None, loa
         elif load_tagger and crf_tagger is None:
             available, state["tagger_v2_message"] = tagger.check_tagger("v2")
             state["tagger_v2"] = tagger.default_tagger_v2() if available else None
+        if crf_tagger_v2_selective is not None:
+            state["tagger_v2s"] = crf_tagger_v2_selective
+        elif load_tagger and crf_tagger is None:
+            available, _ = tagger.check_tagger("v2_selective")
+            state["tagger_v2s"] = tagger.default_tagger_v2_selective() if available else None
         if load_rates:
             try:
                 rates.load_models()
@@ -250,6 +259,7 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None, loa
             tagger_message=state["tagger_message"],
             tagger_v2_loaded=state["tagger_v2"] is not None,
             tagger_v2_message=state["tagger_v2_message"],
+            tagger_v2_selective_loaded=state["tagger_v2s"] is not None,
             rate_model_loaded=state["rates"],
         )
 
@@ -257,12 +267,14 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None, loa
         """The mode that can really be used, a note if it differs, and the arguments for the extractor."""
         needs = {"rules_model": ("embed", "The model is not available, so only the rules were used."),
                  "rules_tagger": ("tagger", "The trained tagger is not available, so only the rules were used."),
-                 "rules_tagger_v2": ("tagger_v2", "The new tagger is not available, so only the rules were used.")}
+                 "rules_tagger_v2": ("tagger_v2", "The new tagger is not available, so only the rules were used."),
+                 "rules_tagger_v2_selective": ("tagger_v2s", "The field-selective tagger is not available, so only the "
+                                                             "rules were used.")}
         if mode in needs and state[needs[mode][0]] is None:
             return "rules", needs[mode][1], {}
         if mode == "rules_model":
             return mode, None, {"model": state["embed"]}
-        if mode in ("rules_tagger", "rules_tagger_v2"):
+        if mode in ("rules_tagger", "rules_tagger_v2", "rules_tagger_v2_selective"):
             return mode, None, {"tagger": state[needs[mode][0]]}
         return mode, None, {}
 

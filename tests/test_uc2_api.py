@@ -80,7 +80,7 @@ def test_extract_with_model_marks_model_values():
     [
         ({"text": "   "}, "text text is empty"),
         ({"text": "a" * 20001}, "text must be at most 20000 characters"),
-        ({"text": "Kerala", "mode": "fast"}, "mode must be 'rules', 'rules_model', 'rules_tagger' or 'rules_tagger_v2'"),
+        ({"text": "Kerala", "mode": "fast"}, "mode must be 'rules', 'rules_model', 'rules_tagger', 'rules_tagger_v2' or 'rules_tagger_v2_selective'"),
         ({"mode": "rules"}, "text is required"),
         ({"text": "Kerala", "colour": "red"}, "colour is not an accepted field"),
     ],
@@ -258,3 +258,14 @@ def test_rates_answer_503_without_the_model():
 def test_rate_request_rejects_unknown_fields(rules_client):
     r = rules_client.post("/rates/predict", json={**BOOKING, "price": 100})
     assert r.status_code == 422 and "price is not an accepted field" in r.json()["errors"]
+
+
+def test_field_selective_mode_only_uses_the_allowed_labels():
+    from src.uc2_extractor.tagger import FieldSelectiveTagger
+
+    nothing_allowed = FieldSelectiveTagger(FakeTagger(), [])
+    with TestClient(api.create_app(load_model=False, crf_tagger=FakeTagger(), crf_tagger_v2=FakeTagger(),
+                                   crf_tagger_v2_selective=nothing_allowed)) as c:
+        assert c.get("/health").json()["tagger_v2_selective_loaded"] is True
+        body = c.post("/extract", json={"text": "We would like to see Zanzibar", "mode": "rules_tagger_v2_selective"}).json()
+    assert body["mode_used"] == "rules_tagger_v2_selective" and body["profile"]["destination"] == []
