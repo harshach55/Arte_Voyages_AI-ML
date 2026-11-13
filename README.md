@@ -8,6 +8,15 @@ Builds a reference hotel nightly rate from historical booking data and tests whe
 
 The recorded rate (adr) is not a live quote. Results on this dataset say nothing about how the model would perform on South Asian luxury hotels.
 
+The first version (code in `src/uc21_rates/`) trains a baseline, Ridge and gradient boosting on arrivals in 2015-2016 and scores them once on a locked 2017 test set, with a 10-90% price range. Results, cleaning steps and a short model card are in `docs/uc21_results.md`. The data goes in `data/uc21_rates/raw/` and the models in `models/uc21_rates/`; neither is committed.
+
+```
+python -m src.uc21_rates.train          (refuses to score the test set a second time)
+python app/uc21_rate_demo.py            (then open http://localhost:8003)
+```
+
+The API below also serves the rate model at `POST /rates/predict`.
+
 ## Use Case 2: Multilingual Travel Inquiry Information Extractor
 
 Pulls key details out of travel inquiries written in English, French or German: destination, dates or duration, travellers, budget, accommodation preferences, flight requirements and special requests. It shows the text that supports each value and flags information that is missing or unclear.
@@ -16,7 +25,7 @@ The first version is rule-based. It returns a validated JSON profile with the fi
 
 It is evaluated on a small synthetic gold set written for this project (60 enquiries, 20 per language). Results and limits are in `docs/uc2_results.md`. The labelling rules are in `docs/uc2_labelling_guide.md`. The budget bands in `src/uc2_extractor/budget_bands.toml` are placeholders.
 
-A trained slot tagger (a CRF) can now fill fields the rules leave empty. It is trained on the public MASSIVE and Taskmaster-2 datasets, knows nine labels in English, and only dates in French and German. On the held-out set it did not improve the results; see `docs/uc2_results.md`. Details are in `docs/uc2_tagger_model_card.md`, `docs/uc2_datasheet.md` and `docs/uc2_label_scheme.md`. The attribution for both datasets is in `NOTICE`.
+A trained slot tagger (a CRF) can now fill fields the rules leave empty. The first tagger is trained on the public MASSIVE and Taskmaster-2 datasets and knows nine labels in English and only dates in French and German. A second tagger also learned from 900 synthetic enquiries written by our generator, so it knows all fields in all three languages (the French and German synthetic text has not yet been checked by a native speaker). Neither tagger reduced errors when added to the rules; see `docs/uc2_results.md`. Details are in `docs/uc2_tagger_model_card.md`, `docs/uc2_datasheet.md` and `docs/uc2_label_scheme.md`. The attribution for both datasets is in `NOTICE`.
 
 Try it:
 
@@ -33,6 +42,9 @@ python -m src.uc2_extractor.training.convert_massive
 python -m src.uc2_extractor.training.convert_taskmaster
 python -m src.uc2_extractor.training.train_crf --jobs 4
 python -m src.uc2_extractor.training.compare_tagger
+python -m src.uc2_extractor.training.synth.generate --per-language 300
+python -m src.uc2_extractor.training.train_crf --jobs 4 --with-synthetic --name crf_tagger_v2
+python -m src.uc2_extractor.training.compare_taggers
 ```
 
 ### Browser demo and corrections
@@ -56,7 +68,9 @@ python app/uc2_api.py
 ```
 
 - `GET /health` says whether the optional model and the trained tagger are loaded.
-- `POST /extract` takes `{"text": "...", "mode": "rules"}`, `"mode": "rules_model"` or `"mode": "rules_tagger"`. It returns the validated client profile: values, flags, the text each value came from, and whether each value came from a rule, the model or the tagger (`crf`).
+- `POST /extract` takes `{"text": "...", "mode": "rules"}`, `"mode": "rules_model"`, `"mode": "rules_tagger"` or `"mode": "rules_tagger_v2"`. It returns the validated client profile: values, flags, the text each value came from, and whether each value came from a rule, the model or a tagger (`crf`).
+- `POST /extract/batch` takes `{"texts": ["...", "..."], "mode": "rules"}` with at most 50 texts, each at most 20,000 characters, and returns one profile per text in the same order.
+- `POST /rates/predict` and `GET /rates/options` serve the hotel rate model of Use Case 1 (see below).
 - The interactive documentation is at http://127.0.0.1:8001/docs. The page loads its scripts from a public CDN, so it needs internet access.
 
 Example (Git Bash, macOS or Linux):
@@ -100,4 +114,4 @@ The datasets are not included in this repository. Download them yourself and pla
 
 The trained tagger uses MASSIVE and Taskmaster-2, both under the Creative Commons Attribution 4.0 (CC BY 4.0) licence. Their attribution and the changes made to them are in `NOTICE`.
 
-The licence of the Hotel Booking Demand dataset has not been checked, so this project makes no claim about it.
+The Hotel Booking Demand dataset (Antonio, Almeida and Nunes, Data in Brief, 2019) is published with a CC BY 4.0 article, as stated in the article itself. Its attribution and the changes made to it are in `NOTICE`.

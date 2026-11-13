@@ -1,10 +1,11 @@
 NOTICE
 
-This project uses two public datasets under the Creative Commons Attribution 4.0
+This project uses three public datasets under the Creative Commons Attribution 4.0
 International licence (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
 
-The datasets are not stored in this repository. The trained tagger in models/uc2_crf/
-(not stored in this repository either) was trained on the converted data described below.
+The datasets are not stored in this repository. The trained taggers in models/uc2_crf/ and the
+rate models in models/uc21_rates/ (not stored in this repository either) were trained on the
+data described below.
 
 
 MASSIVE 1.0
@@ -31,3 +32,22 @@ Attribution 4.0 License. (Wording from the dataset's own README.)
 Changes made for this project: only the hotels and flights files were used, and only USER
 turns. Annotations that fit our labels were converted to them. All other annotated text was
 marked as ignored. See docs/uc2_label_scheme.md for the full mapping.
+
+
+Hotel Booking Demand (used by Use Case 2.1, hotel rate prediction)
+
+Nuno Antonio, Ana de Almeida, Luis Nunes. "Hotel booking demand datasets". Data in Brief,
+volume 22, 2019, pages 41-49. doi: 10.1016/j.dib.2018.11.126
+Licence: CC BY 4.0. The article states: "This is an open access article under the CC BY license
+(http://creativecommons.org/licenses/by/4.0/)." Copyright line: "(c) 2018 The Authors". The
+article's specifications table says "Data is supplied with the paper"; the data files are the
+article's supplementary material. (Read in the full text of PMC6297060 from Europe PMC.)
+
+Copy used: the TidyTuesday copy of 11 February 2020, which stacks the two original files
+(H1, resort hotel; H2, city hotel) into one hotels.csv:
+https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-11/hotels.csv
+
+Changes made for this project: cancelled bookings, bookings with an average daily rate of 0 or
+less, and rates more than ten times above or below the training median were removed; missing
+children counts were set to 0; meal "Undefined" was merged into "SC"; only the columns known at
+booking time were used. See docs/uc21_results.md.
