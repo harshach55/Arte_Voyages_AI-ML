@@ -384,3 +384,126 @@ What the tagger changed compared with rules only:
 | Wrong values added | 2 | 0 | 0 |
 
 Limits: English has nine labels, French and German only dates. The tagger has no training data for ages, budget, interests, dietary needs, occasion or special requests. All test enquiries are synthetic.
+
+## Second tagger (public + synthetic data) compared with the first
+
+How to read this: every number below is optimistic. The gold set and held-out set 1 were seen before (the rules were tuned on them, and the synthetic wording was written by someone who had read them). The synthetic test split comes from the same generator as the training data. The only real number is still the first rules-only run on held-out set 1 (0.81 / 0.88 / 0.86). Held-out set 2 was not touched. Nothing was tuned on any of these sets: c1 and c2 were chosen on the development split.
+
+v1 = first tagger, public data only. v2 = second tagger, public data plus 900 synthetic enquiries (80% training, 10% development, 10% test). French and German synthetic text has not been checked by a native speaker.
+
+Training data (training part, examples):
+
+| Source and language | v1 | v2 |
+|---|---|---|
+| massive de | 546 | 546 |
+| massive en | 538 | 538 |
+| massive fr | 557 | 557 |
+| synthetic de | 0 | 250 |
+| synthetic en | 0 | 231 |
+| synthetic fr | 0 | 239 |
+| taskmaster2 en | 12324 | 12324 |
+
+### Gold set (60 enquiries): seen before, optimistic
+
+All fields pooled, F1 per language, and field errors:
+
+| Mode | en | fr | de | Field errors |
+|---|---|---|---|---|
+| rules only | 0.96 | 0.98 | 0.98 | 42 |
+| v1 only | 0.31 | 0.20 | 0.17 | 606 |
+| v2 only | 0.68 | 0.76 | 0.72 | 310 |
+| rules + v1 | 0.96 | 0.98 | 0.98 | 44 |
+| rules + v2 | 0.96 | 0.97 | 0.98 | 48 |
+
+F1 per field (all languages):
+
+| Field | rules only | v1 only | v2 only | rules + v1 | rules + v2 |
+|---|---|---|---|---|---|
+| language | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| destination | 0.98 | 0.07 | 0.77 | 0.98 | 0.98 |
+| start_date | 0.98 | 0.45 | 0.78 | 0.98 | 0.96 |
+| end_date | 1.00 | 0.42 | 0.89 | 1.00 | 1.00 |
+| duration | 0.91 | 0.22 | 0.66 | 0.89 | 0.86 |
+| dates_ambiguous | 0.91 | 0.78 | 0.78 | 0.91 | 0.91 |
+| party_size | 0.99 | 0.10 | 0.60 | 0.99 | 0.99 |
+| adults | 0.89 | 0.15 | 0.65 | 0.89 | 0.89 |
+| children | 0.87 | - | 0.47 | 0.87 | 0.87 |
+| ages | 1.00 | - | 0.65 | 1.00 | 1.00 |
+| budget_min | 1.00 | - | 0.91 | 1.00 | 1.00 |
+| budget_max | 1.00 | - | 0.87 | 1.00 | 1.00 |
+| currency | 1.00 | - | 0.87 | 1.00 | 1.00 |
+| budget_basis | 1.00 | - | 0.91 | 1.00 | 1.00 |
+| budget_band | 1.00 | - | 0.76 | 1.00 | 1.00 |
+| accommodation | 0.97 | 0.11 | 0.62 | 0.97 | 0.97 |
+| flights | 0.98 | 0.26 | 0.78 | 0.98 | 0.98 |
+| interests | 0.96 | - | 0.31 | 0.96 | 0.96 |
+| dietary | 0.98 | - | 0.47 | 0.98 | 0.98 |
+| occasion | 1.00 | - | 0.27 | 1.00 | 1.00 |
+| special_requests | 0.92 | - | 0.30 | 0.92 | 0.92 |
+
+Fields where v2 is worse than v1: start_date (rules + v2 0.96 against rules + v1 0.98); duration (rules + v2 0.86 against rules + v1 0.89).
+
+### Held-out set 1 (45 enquiries): seen before, optimistic
+
+All fields pooled, F1 per language, and field errors:
+
+| Mode | en | fr | de | Field errors |
+|---|---|---|---|---|
+| rules only | 0.87 | 0.91 | 0.93 | 74 |
+| v1 only | 0.33 | 0.23 | 0.20 | 371 |
+| v2 only | 0.61 | 0.73 | 0.74 | 207 |
+| rules + v1 | 0.87 | 0.91 | 0.93 | 75 |
+| rules + v2 | 0.87 | 0.91 | 0.94 | 76 |
+
+F1 per field (all languages):
+
+| Field | rules only | v1 only | v2 only | rules + v1 | rules + v2 |
+|---|---|---|---|---|---|
+| language | 0.97 | 0.97 | 0.97 | 0.97 | 0.97 |
+| destination | 0.96 | 0.10 | 0.82 | 0.96 | 0.95 |
+| start_date | 0.98 | 0.50 | 0.68 | 0.97 | 0.97 |
+| end_date | 1.00 | 0.33 | 0.46 | 0.95 | 0.95 |
+| duration | 0.93 | 0.23 | 0.81 | 0.95 | 0.95 |
+| dates_ambiguous | 1.00 | 0.25 | 0.92 | 1.00 | 1.00 |
+| party_size | 0.93 | 0.15 | 0.63 | 0.93 | 0.93 |
+| adults | 0.80 | 0.18 | 0.50 | 0.80 | 0.80 |
+| children | 0.86 | - | 0.55 | 0.86 | 0.86 |
+| ages | 0.77 | - | 0.54 | 0.77 | 0.85 |
+| budget_min | 1.00 | - | 0.81 | 1.00 | 1.00 |
+| budget_max | 1.00 | - | 0.83 | 1.00 | 1.00 |
+| currency | 1.00 | - | 0.83 | 1.00 | 1.00 |
+| budget_basis | 0.85 | - | 0.60 | 0.85 | 0.85 |
+| budget_band | 1.00 | - | 0.75 | 1.00 | 1.00 |
+| accommodation | 0.73 | 0.09 | 0.43 | 0.73 | 0.71 |
+| flights | 0.79 | 0.32 | 0.64 | 0.79 | 0.76 |
+| interests | 0.75 | - | 0.15 | 0.75 | 0.75 |
+| dietary | 0.97 | - | 0.42 | 0.97 | 0.97 |
+| occasion | 0.57 | - | 0.18 | 0.57 | 0.57 |
+| special_requests | 0.58 | - | 0.52 | 0.58 | 0.69 |
+
+Fields where v2 is worse than v1: destination (rules + v2 0.95 against rules + v1 0.96); accommodation (rules + v2 0.71 against rules + v1 0.73); flights (rules + v2 0.76 against rules + v1 0.79).
+
+### Synthetic test split: synthetic, optimistic
+
+Span F1 per label (exact spans, as filtered in the app):
+
+| Label | en v1 | en v2 | fr v1 | fr v2 | de v1 | de v2 |
+|---|---|---|---|---|---|---|
+| ACCOMMODATION | 0.04 | 0.92 | 0.00 | 1.00 | 0.00 | 1.00 |
+| ADULTS | 0.75 | 1.00 | 0.00 | 1.00 | 0.00 | 1.00 |
+| AGE | 0.00 | 1.00 | 0.00 | 1.00 | 0.00 | 1.00 |
+| BUDGET | 0.00 | 0.97 | 0.00 | 1.00 | 0.00 | 0.92 |
+| CHILDREN | 0.18 | 0.95 | 0.00 | 1.00 | 0.00 | 1.00 |
+| DATE | 0.18 | 0.83 | 0.12 | 0.91 | 0.05 | 0.91 |
+| DESTINATION | 0.06 | 0.96 | 0.00 | 0.98 | 0.00 | 1.00 |
+| DIETARY | 0.00 | 0.88 | 0.00 | 0.92 | 0.00 | 0.94 |
+| DURATION | 0.48 | 0.99 | 0.00 | 0.95 | 0.00 | 0.97 |
+| FLIGHT | 0.07 | 0.92 | 0.00 | 0.96 | 0.00 | 1.00 |
+| INTEREST | 0.00 | 0.98 | 0.00 | 0.98 | 0.00 | 0.95 |
+| OCCASION | 0.00 | 0.90 | 0.00 | 0.87 | 0.00 | 0.89 |
+| ORIGIN | 0.57 | 0.89 | 0.00 | 0.86 | 0.00 | 1.00 |
+| PARTY | 0.67 | 1.00 | 0.00 | 1.00 | 0.00 | 0.93 |
+| SPECIAL_REQUEST | 0.00 | 0.83 | 0.00 | 0.96 | 0.00 | 0.94 |
+| ALL | 0.19 | 0.94 | 0.02 | 0.97 | 0.01 | 0.97 |
+
+Synthetic test enquiries: en 43, fr 30, de 28. This split is small, so single labels can move a lot.

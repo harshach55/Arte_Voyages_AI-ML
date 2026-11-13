@@ -11,11 +11,18 @@ Text that a source annotated with something we do not use ("ignore" in the data)
 of training: each sentence is cut at those tokens, so the tagger is not told they are plain
 text. On the development split, a predicted span on ignored text is not counted.
 
+Synthetic enquiries (--with-synthetic) are split by a hash of their id: 80% training, 10%
+development, 10% test. The synthetic test part is never used for training or tuning.
+
 Only c1 and c2 are tuned, on the development split. The score used to choose them is the mean
 of the per-language F1, so French and German count as much as English.
 
+With synthetic data, a small classifier per label is also trained on the synthetic training
+spans, to turn a span such as "seeing big cats in the wild" into its field label ("wildlife").
+
 Usage:
-    python -m src.uc2_extractor.training.train_crf --jobs 3
+    python -m src.uc2_extractor.training.train_crf --jobs 3                       (first tagger)
+    python -m src.uc2_extractor.training.train_crf --jobs 4 --with-synthetic --name crf_tagger_v2
 """
 
 from __future__ import annotations
@@ -37,6 +44,8 @@ from .common import TRAINING_DIR, read_jsonl
 from .labels import IGNORE_TAG, spans_to_bio
 
 SOURCES = (TRAINING_DIR / "converted" / "massive.jsonl", TRAINING_DIR / "converted" / "taskmaster2.jsonl")
+SYNTHETIC = TRAINING_DIR / "synthetic" / "pilot.jsonl"
+LABEL_CLASSIFIER_LABELS = ("ACCOMMODATION", "FLIGHT", "INTEREST", "DIETARY", "OCCASION", "SPECIAL_REQUEST")
 DEV_SHARE = 15
 GRID_C1 = (0.05, 0.2, 0.5)
 GRID_C2 = (0.01, 0.1)
@@ -52,9 +61,56 @@ def is_dev(example: dict) -> bool:
     return hashlib.sha256(dialogue.encode("utf-8")).digest()[0] * 100 // 256 < DEV_SHARE
 
 
+def split_of(example: dict) -> str:
+    """train, dev or test. Only synthetic examples have a test part."""
+    if example["source"] == "synthetic":
+        bucket = int(hashlib.sha256(example["id"].encode("utf-8")).hexdigest(), 16) % 10
+        return "test" if bucket == 0 else "dev" if bucket == 1 else "train"
+    return "dev" if is_dev(example) else "train"
+
+
 def load_split(sources: Iterable[Path] = SOURCES) -> tuple[list[dict], list[dict]]:
     examples = [e for path in sources for e in read_jsonl(path)]
-    return [e for e in examples if not is_dev(e)], [e for e in examples if is_dev(e)]
+    return [e for e in examples if split_of(e) == "train"], [e for e in examples if split_of(e) == "dev"]
+
+
+def synthetic_test(path: Path = SYNTHETIC) -> list[dict]:
+    """The synthetic test part, never used for training or tuning."""
+    return [e for e in read_jsonl(path) if split_of(e) == "test"]
+
+
+def train_label_classifiers(examples: Iterable[dict]) -> tuple[dict, dict]:
+    """One small text classifier per label: span text -> field label. Character n-grams cope with typos."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+
+    texts: dict[str, list] = defaultdict(list)
+    for e in examples:
+        for s in e["spans"]:
+            if s["label"] in LABEL_CLASSIFIER_LABELS and isinstance(s.get("value"), str):
+                texts[s["label"]].append((s["text"], s["value"]))
+    models, counts = {}, {}
+    for label, rows in texts.items():
+        if len({v for _, v in rows}) < 2:
+            continue
+        model = make_pipeline(TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5), lowercase=True, sublinear_tf=True),
+                              LogisticRegression(max_iter=2000, C=10.0))
+        model.fit([t for t, _ in rows], [v for _, v in rows])
+        models[label], counts[label] = model, len(rows)
+    return models, counts
+
+
+def label_accuracy(models: dict, examples: Iterable[dict]) -> dict:
+    """Share of development spans whose label the classifier gets right, per label."""
+    right, total = Counter(), Counter()
+    for e in examples:
+        for s in e["spans"]:
+            model = models.get(s["label"])
+            if model is not None and isinstance(s.get("value"), str):
+                total[s["label"]] += 1
+                right[s["label"]] += model.predict([s["text"]])[0] == s["value"]
+    return {label: {"spans": total[label], "accuracy": round(right[label] / total[label], 3)} for label in sorted(total)}
 
 
 def to_sequences(example: dict) -> list[tuple[list[dict], list[str]]]:
@@ -164,25 +220,29 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--max-iterations", type=int, default=MAX_ITERATIONS)
+    parser.add_argument("--with-synthetic", action="store_true", help=f"add {SYNTHETIC.name} (training part only)")
+    parser.add_argument("--name", default=MODEL_FILE.stem, help="file name of the model, without extension")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    grid_dir = MODEL_DIR / "grid"
+    sources = SOURCES + ((SYNTHETIC,) if args.with_synthetic else ())
+    model_file = MODEL_DIR / f"{args.name}.crfsuite"
+    grid_dir = MODEL_DIR / "grid" / args.name
     grid_dir.mkdir(parents=True, exist_ok=True)
-    train, dev = load_split()
+    train, dev = load_split(sources)
     print(f"train {len(train)} examples, dev {len(dev)} examples", flush=True)
     grid = [(c1, c2) for c1 in GRID_C1 for c2 in GRID_C2]
     paths = [grid_dir / f"c1_{c1}_c2_{c2}.crfsuite" for c1, c2 in grid]
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
-        results = list(pool.map(fit_one, grid, paths, [SOURCES] * len(grid), [args.max_iterations] * len(grid)))
+        results = list(pool.map(fit_one, grid, paths, [sources] * len(grid), [args.max_iterations] * len(grid)))
     for r in results:
         print(f"c1={r['c1']} c2={r['c2']} score={r['selection_score']} ({r['seconds']}s)", flush=True)
 
     best = max(results, key=lambda r: r["selection_score"])
-    shutil.copyfile(best["model_path"], MODEL_FILE)
+    shutil.copyfile(best["model_path"], model_file)
     info = {
-        "model": "CRF, L-BFGS, sklearn-crfsuite", "c1": best["c1"], "c2": best["c2"],
+        "name": args.name, "model": "CRF, L-BFGS, sklearn-crfsuite", "c1": best["c1"], "c2": best["c2"],
         "max_iterations": args.max_iterations, "min_confidence": MIN_CONFIDENCE,
         "train_examples": len(train), "dev_examples": len(dev),
         "train_by_source": dict(Counter(e["source"] for e in train)),
@@ -192,10 +252,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         "labels_by_language": labels_by_language(train),
         "grid": [{k: r[k] for k in ("c1", "c2", "selection_score", "seconds")} for r in results],
         "dev_report": best["report"],
-        "data_sha256": {p.name: sha256(p) for p in SOURCES},
+        "data_sha256": {p.name: sha256(p) for p in sources},
+        "train_by_source_language": {f"{s} {l}": n for (s, l), n in sorted(Counter((e["source"], e["language"]) for e in train).items())},
     }
-    INFO_FILE.write_text(json.dumps(info, indent=2), encoding="utf-8")
-    print(f"\nChosen: c1={best['c1']} c2={best['c2']}. Saved to {MODEL_FILE}")
+    if args.with_synthetic:
+        import joblib
+
+        models, counts = train_label_classifiers(train)
+        joblib.dump(models, MODEL_DIR / f"{args.name}_labels.joblib")
+        info["span_labels"] = f"{args.name}_labels.joblib"
+        info["span_label_training_spans"] = counts
+        info["span_label_dev_accuracy"] = label_accuracy(models, dev)
+        info["synthetic_test_examples"] = len(synthetic_test())
+    model_file.with_suffix(".json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    print(f"\nChosen: c1={best['c1']} c2={best['c2']}. Saved to {model_file}")
     print("Development split, exact spans, as filtered in the app:")
     print_report(best["report"])
     return 0

@@ -99,3 +99,14 @@ So on this set the tagger did not improve the system. It can find places that ar
 - It cannot find ages, budgets, interests, dietary needs, occasions or special requests.
 - Its probabilities are not calibrated.
 - It has not been tested on real enquiries or on held-out set 2.
+
+## Second tagger (v2)
+
+- **Files:** `models/uc2_crf/crf_tagger_v2.crfsuite`, `crf_tagger_v2.json` and `crf_tagger_v2_labels.joblib` (not stored in this repository). The first tagger is kept unchanged beside it.
+- **Data:** the same public data plus the training part of 900 synthetic enquiries (14,685 training examples in all). See section 9 of `docs/uc2_datasheet.md`.
+- **Labels:** all 15 labels in English, French and German.
+- **Settings:** c1 = 0.05, c2 = 0.1, chosen on the development split with the same 6-value grid.
+- **Development F1, all labels:** en 0.847, fr 0.828, de 0.883. The development split now includes synthetic enquiries, which are easier than real ones.
+- **Span-to-label classifier:** one small text classifier per label (character n-grams, logistic regression) turns a span such as "seeing big cats in the wild" into its field label. It is only used when the word lists find nothing, and only when it is at least 0.5 sure. On the development split it got these right: accommodation 100% of 44, dietary 100% of 35, flight 100% of 456, interest 99% of 94, occasion 96% of 22, special_request 100% of 38. These are mostly synthetic spans, so the numbers are optimistic.
+- **Results:** see "Second tagger (public + synthetic data) compared with the first" in `docs/uc2_results.md`. On its own it is far better than the first tagger. Added to the rules, it did not reduce errors on the gold set or held-out set 1, and some fields got slightly worse.
+- **Mode:** `rules_tagger_v2` in the API, "rules + new tagger" in the demo.

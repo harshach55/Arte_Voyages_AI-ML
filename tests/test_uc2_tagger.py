@@ -1,6 +1,7 @@
 """Tests for the trained tagger: features, split, metrics, offsets and filling empty fields."""
 
 import json
+from collections import Counter
 
 import pytest
 
@@ -370,3 +371,77 @@ def test_missing_model_file_gives_a_clear_error(tmp_path):
 
 def test_span_type_is_plain():
     assert TaggedSpan("DATE", 0, 3, "May", 0.8).label == "DATE"
+
+
+# --- the second tagger: new labels ---------------------------------------------------------------
+
+
+class LabelFake(FakeTagger):
+    """A fake tagger that also has a span-to-label classifier."""
+
+    def __init__(self, phrases, labels, probability=0.8):
+        super().__init__(phrases, allowed={"en": ALL_ENGLISH | {"AGE", "INTEREST", "DIETARY", "OCCASION", "SPECIAL_REQUEST"}})
+        self.labels, self.probability = labels, probability
+
+    def label_for(self, label, text):
+        return self.labels.get(text), self.probability
+
+
+def test_classifier_turns_unusual_wording_into_a_label():
+    p = ClientProfile(language="en")
+    add_tagger_values(p, "We long for big cats in the wild", LabelFake({"big cats in the wild": "INTEREST"},
+                                                                        {"big cats in the wild": "wildlife"}))
+    assert p.interests == ["wildlife"]
+    assert sources(p, "interests")[0].confidence == 0.8  # the lower of span confidence (0.9) and label probability
+
+
+def test_unsure_classifier_adds_nothing():
+    p = ClientProfile(language="en")
+    add_tagger_values(p, "We long for big cats in the wild", LabelFake({"big cats in the wild": "INTEREST"},
+                                                                        {"big cats in the wild": "wildlife"}, 0.4))
+    assert p.interests == []
+
+
+def test_word_lists_come_before_the_classifier():
+    p = ClientProfile(language="en")
+    add_tagger_values(p, "We want tiger safaris", LabelFake({"tiger safaris": "INTEREST"}, {"tiger safaris": "beach"}))
+    assert p.interests == ["wildlife"]
+
+
+@pytest.mark.parametrize("label, phrase, field, value", [
+    ("DIETARY", "no meat at all", "dietary", "vegetarian"),
+    ("OCCASION", "our first trip as a married couple", "occasion", "honeymoon"),
+    ("SPECIAL_REQUEST", "someone else to do the driving", "special_requests", "private driver"),
+])
+def test_other_label_fields_are_filled_the_same_way(label, phrase, field, value):
+    p = ClientProfile(language="en")
+    add_tagger_values(p, f"Note: {phrase}.", LabelFake({phrase: label}, {phrase: value}))
+    assert getattr(p, field) == [value]
+
+
+def test_ages_come_from_age_spans():
+    p = ClientProfile(language="en")
+    add_tagger_values(p, "2 adults and 2 kids, they are 7 and 10", LabelFake(
+        {"2 adults": "ADULTS", "2 kids": "CHILDREN", "7 and 10": "AGE"}, {}))
+    assert p.travellers.ages == [7, 10] and p.travellers.party_size == 4
+
+
+def test_more_ages_than_travellers_are_not_added():
+    p = ClientProfile(language="en")
+    p.travellers.party_size = 1
+    add_tagger_values(p, "ages 7 and 10", LabelFake({"7 and 10": "AGE"}, {}))
+    assert p.travellers.ages == []
+
+
+def test_synthetic_split_is_fixed_and_keeps_test_out_of_training():
+    rows = [{"id": f"synth-en-{i:06d}", "source": "synthetic"} for i in range(1000)]
+    parts = Counter(train_crf.split_of(r) for r in rows)
+    assert parts == Counter(train_crf.split_of(r) for r in rows)
+    assert 60 < parts["test"] < 140 and 60 < parts["dev"] < 140
+
+
+def test_v2_name_picks_the_second_tagger(monkeypatch):
+    from src.uc2_extractor import tagger
+
+    monkeypatch.setattr(tagger, "default_tagger_v2", lambda: "second")
+    assert tagger.resolve("v2") == "second"
