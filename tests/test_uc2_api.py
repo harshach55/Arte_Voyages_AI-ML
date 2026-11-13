@@ -205,3 +205,56 @@ def test_batch_rejects_bad_input_without_echoing_it(rules_client, payload, expec
 def test_batch_of_fifty_long_texts_is_accepted_by_the_size_limit(rules_client):
     r = rules_client.post("/extract/batch", json={"texts": ["Kerala in March. " * 1100] * 50})
     assert r.status_code == 200 and r.json()["count"] == 50
+
+
+# --- hotel rates ----------------------------------------------------------------------------------
+
+BOOKING = {"hotel": "City Hotel", "arrival_date": "2017-05-12", "nights": 3, "adults": 2, "children": 0,
+           "room_type": "A", "meal": "BB", "channel": "TA/TO", "lead_time": 30}
+rates_ready = pytest.mark.skipif(not (ROOT / "models" / "uc21_rates" / "meta.json").exists(),
+                                 reason="rate model not trained on this machine")
+
+
+@rates_ready
+def test_rate_prediction_gives_a_rate_inside_its_range(rules_client):
+    assert rules_client.get("/health").json()["rate_model_loaded"] is True
+    r = rules_client.post("/rates/predict", json=BOOKING)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["currency"] == "EUR" and body["low"] <= body["rate"] <= body["high"]
+    assert "not a quote" in body["note"].lower() and body["seasonality"] is None
+
+
+@rates_ready
+def test_rate_prediction_can_include_twelve_months(rules_client):
+    body = rules_client.post("/rates/predict", json={**BOOKING, "include_seasonality": True}).json()
+    assert [m["month"] for m in body["seasonality"]] == list(range(1, 13))
+
+
+@rates_ready
+@pytest.mark.parametrize("change, expected", [
+    ({"hotel": "Beach Hotel"}, "hotel must be one of"),
+    ({"arrival_date": "12/05/2017"}, "arrival_date must be a date written as YYYY-MM-DD"),
+    ({"adults": 0, "children": 0}, "a booking needs at least one adult or child"),
+])
+def test_bad_booking_gets_a_short_error(rules_client, change, expected):
+    r = rules_client.post("/rates/predict", json={**BOOKING, **change})
+    assert r.status_code == 422 and any(expected in e for e in r.json()["errors"])
+
+
+@rates_ready
+def test_rate_options_list_allowed_values(rules_client):
+    body = rules_client.get("/rates/options").json()
+    assert "City Hotel" in body["allowed"]["hotel"] and "lead_time" in body["limits"]
+
+
+def test_rates_answer_503_without_the_model():
+    with TestClient(api.create_app(load_model=False, load_tagger=False, load_rates=False)) as c:
+        assert c.get("/health").json()["rate_model_loaded"] is False
+        r = c.post("/rates/predict", json=BOOKING)
+    assert r.status_code == 503 and r.json()["errors"] == ["the rate model is not available"]
+
+
+def test_rate_request_rejects_unknown_fields(rules_client):
+    r = rules_client.post("/rates/predict", json={**BOOKING, "price": 100})
+    assert r.status_code == 422 and "price is not an accepted field" in r.json()["errors"]

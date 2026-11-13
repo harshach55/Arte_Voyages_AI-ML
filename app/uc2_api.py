@@ -1,4 +1,4 @@
-"""Small local API for the travel enquiry extractor.
+"""Small local API for the travel enquiry extractor and the hotel rate model.
 
 Run from the project root:
     python app/uc2_api.py                 (then open http://127.0.0.1:8001/docs)
@@ -7,7 +7,9 @@ Run from the project root:
 Endpoints:
     POST /extract         {"text": "...", "mode": "rules" | "rules_model" | "rules_tagger" | "rules_tagger_v2"}
     POST /extract/batch   {"texts": ["...", "..."], "mode": ...}   at most 50 texts
-    GET  /health          whether the model files and the trained taggers are loaded
+    POST /rates/predict   one hotel booking -> reference nightly rate (EUR) and a 10-90% range
+    GET  /rates/options   allowed values and defaults for /rates/predict
+    GET  /health          whether the model files, the trained taggers and the rate model are loaded
 
 Privacy: the API never logs or echoes enquiry text. Error messages describe
 the problem without repeating the input, and access logging is switched off.
@@ -28,6 +30,7 @@ from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field, field_validator  # noqa: E402
 
+from src.uc21_rates import predict as rates  # noqa: E402
 from src.uc2_extractor import semantic, tagger  # noqa: E402
 from src.uc2_extractor.extract import extract_profile  # noqa: E402
 from src.uc2_extractor.schema import ClientProfile  # noqa: E402
@@ -81,6 +84,47 @@ class BatchResponse(BaseModel):
     profiles: list[ClientProfile]
 
 
+class RateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hotel: str = Field(description="'Resort Hotel' or 'City Hotel'")
+    arrival_date: str = Field(description="YYYY-MM-DD")
+    nights: int
+    adults: int
+    children: int = 0
+    room_type: str = Field(description="reserved room type letter, see /rates/options")
+    meal: str = Field(description="BB, HB, FB, SC or Undefined, see /rates/options")
+    channel: str = Field(description="distribution channel, see /rates/options")
+    lead_time: int = Field(description="days between booking and arrival")
+    market_segment: Optional[str] = None
+    customer_type: Optional[str] = None
+    is_repeated_guest: Optional[int] = None
+    parking: Optional[int] = None
+    special_requests: Optional[int] = None
+    babies: Optional[int] = None
+    include_seasonality: bool = Field(default=False, description="also return the rate for each month of 2017")
+
+
+class MonthRate(BaseModel):
+    month: int
+    rate: float
+    low: float
+    high: float
+
+
+class RateResponse(BaseModel):
+    rate: float = Field(description="predicted average nightly rate, EUR")
+    low: float = Field(description="10th percentile model")
+    high: float = Field(description="90th percentile model")
+    currency: Literal["EUR"]
+    note: str
+    seasonality: Optional[list[MonthRate]] = None
+
+
+RATE_NOTE = ("Reference rate from two Portuguese hotels, 2015-2016 price levels. Not a quote, and not South Asian "
+             "luxury hotels. The 10-90% range is where most similar bookings fell, not a guarantee.")
+
+
 class ExtractResponse(BaseModel):
     mode_requested: Mode
     mode_used: Mode
@@ -100,6 +144,7 @@ class Health(BaseModel):
     tagger_message: str
     tagger_v2_loaded: bool
     tagger_v2_message: str
+    rate_model_loaded: bool
 
 
 def _short_errors(exc: RequestValidationError) -> list[str]:
@@ -133,10 +178,10 @@ def _short_errors(exc: RequestValidationError) -> list[str]:
 
 
 def create_app(load_model: bool = True, embedder: Optional[Callable] = None, load_tagger: bool = True,
-               crf_tagger=None, crf_tagger_v2=None) -> FastAPI:
+               crf_tagger=None, crf_tagger_v2=None, load_rates: bool = True) -> FastAPI:
     """Build the API. `embedder` and the `crf_tagger` arguments replace the real ones (used in tests)."""
     state = {"embed": None, "message": "model not loaded", "tagger": None, "tagger_message": "tagger not loaded",
-             "tagger_v2": None, "tagger_v2_message": "new tagger not loaded"}
+             "tagger_v2": None, "tagger_v2_message": "new tagger not loaded", "rates": False}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -164,6 +209,12 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None, loa
         elif load_tagger and crf_tagger is None:
             available, state["tagger_v2_message"] = tagger.check_tagger("v2")
             state["tagger_v2"] = tagger.default_tagger_v2() if available else None
+        if load_rates:
+            try:
+                rates.load_models()
+                state["rates"] = True
+            except Exception:  # model files missing
+                state["rates"] = False
         yield
 
     app = FastAPI(
@@ -199,6 +250,7 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None, loa
             tagger_message=state["tagger_message"],
             tagger_v2_loaded=state["tagger_v2"] is not None,
             tagger_v2_message=state["tagger_v2_message"],
+            rate_model_loaded=state["rates"],
         )
 
     def choose(mode: str) -> tuple[str, Optional[str], dict]:
@@ -219,6 +271,26 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None, loa
         mode_used, note, options = choose(req.mode)
         profile = extract_profile(req.text, **options)
         return ExtractResponse(mode_requested=req.mode, mode_used=mode_used, note=note, profile=profile)
+
+    @app.post("/rates/predict", response_model=RateResponse)
+    def predict_rate(req: RateRequest):
+        """Reference nightly rate for one booking (Hotel Booking Demand data, gradient boosting)."""
+        if not state["rates"]:
+            return JSONResponse(status_code=503, content={"errors": ["the rate model is not available"]})
+        booking = req.model_dump(exclude={"include_seasonality"}, exclude_none=True)
+        try:
+            result = rates.predict_rate(booking)
+            months = rates.seasonality(booking) if req.include_seasonality else None
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"errors": [str(exc)]})
+        return RateResponse(**result, note=RATE_NOTE, seasonality=months)
+
+    @app.get("/rates/options")
+    def rate_options():
+        """Allowed values, defaults and number ranges for /rates/predict (from the training data)."""
+        if not state["rates"]:
+            return JSONResponse(status_code=503, content={"errors": ["the rate model is not available"]})
+        return {"allowed": rates.allowed_values(), "defaults": rates.defaults(), "limits": rates.numeric_limits()}
 
     @app.post("/extract/batch", response_model=BatchResponse)
     def extract_batch(req: BatchRequest) -> BatchResponse:
