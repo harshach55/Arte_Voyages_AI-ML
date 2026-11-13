@@ -105,7 +105,7 @@ class Evidence(_Strict):
     text: str
     start: int = Field(ge=0)
     end: int
-    source: Literal["rule", "model"] = "rule"
+    source: Literal["rule", "model", "crf"] = "rule"
 
     @field_validator("field")
     @classmethod
@@ -143,14 +143,16 @@ class Provenance(_Strict):
 
     `value` is a label for list fields (e.g. "wildlife"); for the language,
     dates, travellers and budget sections it is empty and covers the whole
-    section. Rule values have no confidence. Model values carry the cosine
-    similarity that matched them (0 to 1); it is a matching score, not a
-    calibrated probability.
+    section, except that a value from the tagger names the part it filled
+    (e.g. "start" or "adults"). Rule values have no confidence. Model values
+    carry the cosine similarity that matched them (0 to 1); it is a matching
+    score, not a calibrated probability. Tagger values (source "crf") carry the
+    tagger's marginal probability, which is not calibrated either.
     """
 
     field: str
     value: str = ""
-    source: Literal["rule", "model"]
+    source: Literal["rule", "model", "crf"]
     confidence: Optional[float] = Field(default=None, ge=0, le=1)
 
     @field_validator("field")
@@ -162,7 +164,7 @@ class Provenance(_Strict):
 
     @model_validator(mode="after")
     def _model_needs_confidence(self) -> "Provenance":
-        if self.source == "model" and self.confidence is None:
+        if self.source in ("model", "crf") and self.confidence is None:
             raise ValueError("a model value needs a confidence")
         if self.source == "rule" and self.confidence is not None:
             raise ValueError("rule values have no confidence")

@@ -5,8 +5,8 @@ Run from the project root:
     python app/uc2_api.py --port 8002 --no-model
 
 Endpoints:
-    POST /extract   {"text": "...", "mode": "rules" | "rules_model"}
-    GET  /health    whether the model files are loaded
+    POST /extract   {"text": "...", "mode": "rules" | "rules_model" | "rules_tagger"}
+    GET  /health    whether the model files and the trained tagger are loaded
 
 Privacy: the API never logs or echoes enquiry text. Error messages describe
 the problem without repeating the input, and access logging is switched off.
@@ -27,20 +27,23 @@ from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field, field_validator  # noqa: E402
 
-from src.uc2_extractor import semantic  # noqa: E402
+from src.uc2_extractor import semantic, tagger  # noqa: E402
 from src.uc2_extractor.extract import extract_profile  # noqa: E402
 from src.uc2_extractor.schema import ClientProfile  # noqa: E402
 
 MAX_CHARS = 20_000
 MAX_BODY_BYTES = 200_000
+Mode = Literal["rules", "rules_model", "rules_tagger"]
 
 
 class ExtractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(description="The enquiry, in English, French or German.", max_length=MAX_CHARS)
-    mode: Literal["rules", "rules_model"] = Field(
-        default="rules", description="'rules' (default) or 'rules_model' to add the optional model layer."
+    mode: Mode = Field(
+        default="rules",
+        description="'rules' (default), 'rules_model' to add the optional model layer, or 'rules_tagger' to let "
+                    "the trained tagger fill what the rules left empty.",
     )
 
     @field_validator("text")
@@ -52,12 +55,12 @@ class ExtractRequest(BaseModel):
 
 
 class ExtractResponse(BaseModel):
-    mode_requested: Literal["rules", "rules_model"]
-    mode_used: Literal["rules", "rules_model"]
-    note: Optional[str] = Field(default=None, description="Set when the model was requested but not available.")
+    mode_requested: Mode
+    mode_used: Mode
+    note: Optional[str] = Field(default=None, description="Set when the model or tagger was requested but not available.")
     profile: ClientProfile = Field(
         description="Validated client profile: values, evidence (source text with its position), "
-                    "flags, and provenance (rule or model, with the model's confidence)."
+                    "flags, and provenance (rule, model or crf, with the confidence of model and crf values)."
     )
 
 
@@ -66,6 +69,8 @@ class Health(BaseModel):
     model_loaded: bool
     model_message: str
     threshold: Optional[float]
+    tagger_loaded: bool
+    tagger_message: str
 
 
 def _short_errors(exc: RequestValidationError) -> list[str]:
@@ -79,7 +84,7 @@ def _short_errors(exc: RequestValidationError) -> list[str]:
         elif kind == "missing":
             msg = "is required"
         elif kind == "literal_error":
-            msg = "must be 'rules' or 'rules_model'"
+            msg = "must be 'rules', 'rules_model' or 'rules_tagger'"
         elif kind == "extra_forbidden":
             msg = "is not an accepted field"
         elif kind in ("json_invalid", "model_attributes_type", "dict_type"):
@@ -92,9 +97,10 @@ def _short_errors(exc: RequestValidationError) -> list[str]:
     return out
 
 
-def create_app(load_model: bool = True, embedder: Optional[Callable] = None) -> FastAPI:
-    """Build the API. `embedder` replaces the real model (used in tests)."""
-    state = {"embed": None, "message": "model not loaded"}
+def create_app(load_model: bool = True, embedder: Optional[Callable] = None, load_tagger: bool = True,
+               crf_tagger=None) -> FastAPI:
+    """Build the API. `embedder` and `crf_tagger` replace the real ones (used in tests)."""
+    state = {"embed": None, "message": "model not loaded", "tagger": None, "tagger_message": "tagger not loaded"}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -110,14 +116,22 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None) -> 
                 state["message"] = f"model loaded (threshold {semantic.DEFAULT_THRESHOLD})"
             except Exception as exc:  # missing files or packages
                 state["message"] = f"model not available ({type(exc).__name__}); rules only"
+        if crf_tagger is not None:
+            state["tagger"], state["tagger_message"] = crf_tagger, "test tagger in use"
+        elif not load_tagger:
+            state["tagger_message"] = "tagger switched off; rules only"
+        else:
+            available, state["tagger_message"] = tagger.check_tagger()
+            state["tagger"] = tagger.default_tagger() if available else None
         yield
 
     app = FastAPI(
         title="Travel Enquiry Extractor API",
         version="1.0",
         description="Turns a free-text travel enquiry (English, French or German) into a validated client "
-                    "profile. Rules only by default; an optional model layer can fill some label fields the "
-                    "rules leave empty. Scored only on synthetic test sets; budget bands are placeholders.",
+                    "profile. Rules only by default; a trained tagger or an optional model layer can fill "
+                    "fields the rules leave empty. Scored only on synthetic test sets; budget bands are "
+                    "placeholders.",
         lifespan=lifespan,
     )
 
@@ -139,6 +153,8 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None) -> 
             model_loaded=state["embed"] is not None,
             model_message=state["message"],
             threshold=semantic.DEFAULT_THRESHOLD if state["embed"] is not None else None,
+            tagger_loaded=state["tagger"] is not None,
+            tagger_message=state["tagger_message"],
         )
 
     @app.post("/extract", response_model=ExtractResponse)
@@ -148,8 +164,12 @@ def create_app(load_model: bool = True, embedder: Optional[Callable] = None) -> 
         if req.mode == "rules_model" and state["embed"] is None:
             mode_used = "rules"
             note = "The model is not available, so only the rules were used."
+        if req.mode == "rules_tagger" and state["tagger"] is None:
+            mode_used = "rules"
+            note = "The trained tagger is not available, so only the rules were used."
         model = state["embed"] if mode_used == "rules_model" else False
-        profile = extract_profile(req.text, model=model)
+        crf = state["tagger"] if mode_used == "rules_tagger" else False
+        profile = extract_profile(req.text, model=model, tagger=crf)
         return ExtractResponse(mode_requested=req.mode, mode_used=mode_used, note=note, profile=profile)
 
     return app
@@ -164,10 +184,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Local API for the travel enquiry extractor.")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--no-model", action="store_true", help="do not load the model (rules only)")
+    parser.add_argument("--no-tagger", action="store_true", help="do not load the trained tagger")
     args = parser.parse_args(argv)
     print(f"Travel Enquiry Extractor API at http://127.0.0.1:{args.port}  (docs: /docs)")
-    uvicorn.run(create_app(load_model=not args.no_model), host="127.0.0.1", port=args.port,
-                access_log=False, log_level="warning")
+    uvicorn.run(create_app(load_model=not args.no_model, load_tagger=not args.no_tagger), host="127.0.0.1",
+                port=args.port, access_log=False, log_level="warning")
     return 0
 
 

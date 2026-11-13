@@ -80,7 +80,7 @@ def test_extract_with_model_marks_model_values():
     [
         ({"text": "   "}, "text text is empty"),
         ({"text": "a" * 20001}, "text must be at most 20000 characters"),
-        ({"text": "Kerala", "mode": "fast"}, "mode must be 'rules' or 'rules_model'"),
+        ({"text": "Kerala", "mode": "fast"}, "mode must be 'rules', 'rules_model' or 'rules_tagger'"),
         ({"mode": "rules"}, "text is required"),
         ({"text": "Kerala", "colour": "red"}, "colour is not an accepted field"),
     ],
@@ -114,3 +114,46 @@ def test_docs_page_and_schema_are_available(rules_client):
     assert rules_client.get("/docs").status_code == 200
     schema = rules_client.get("/openapi.json").json()
     assert "/extract" in schema["paths"] and "/health" in schema["paths"]
+
+
+# --- rules_tagger -------------------------------------------------------------------------------
+
+
+class FakeTagger:
+    """Marks the word Zanzibar as a destination."""
+
+    def labels_for(self, language):
+        return {"DESTINATION"}
+
+    def predict(self, words, language):
+        tags = ["B-DESTINATION" if w == "Zanzibar" else "O" for w in words]
+        return tags, [0.87] * len(words)
+
+
+def test_rules_tagger_mode_marks_crf_values():
+    with TestClient(api.create_app(load_model=False, crf_tagger=FakeTagger())) as c:
+        assert c.get("/health").json()["tagger_loaded"] is True
+        r = c.post("/extract", json={"text": "We would like to see Zanzibar with our kids", "mode": "rules_tagger"})
+    body = r.json()
+    assert r.status_code == 200 and body["mode_used"] == "rules_tagger" and body["note"] is None
+    profile = api.ClientProfile.model_validate(body["profile"])
+    assert profile.destination == ["Zanzibar"]
+    tags = [p for p in profile.provenance if p.field == "destination"]
+    assert tags[0].source == "crf" and tags[0].confidence == 0.87
+    assert [e.source for e in profile.evidence if e.field == "destination"] == ["crf"]
+
+
+def test_rules_tagger_mode_falls_back_to_rules_without_the_tagger():
+    with TestClient(api.create_app(load_model=False, load_tagger=False)) as c:
+        health = c.get("/health").json()
+        r = c.post("/extract", json={"text": ENQUIRY, "mode": "rules_tagger"})
+    assert health["tagger_loaded"] is False
+    body = r.json()
+    assert body["mode_requested"] == "rules_tagger" and body["mode_used"] == "rules"
+    assert "not available" in body["note"]
+
+
+def test_other_modes_do_not_use_the_tagger():
+    with TestClient(api.create_app(load_model=False, crf_tagger=FakeTagger())) as c:
+        body = c.post("/extract", json={"text": "We would like to see Zanzibar", "mode": "rules"}).json()
+    assert body["profile"]["destination"] == []

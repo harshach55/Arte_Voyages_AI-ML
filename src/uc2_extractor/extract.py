@@ -648,8 +648,11 @@ def _missing_flags(p: ClientProfile) -> list[Flag]:
     return flags
 
 
-def extract_profile(text: str, model=False, threshold: Optional[float] = None) -> ClientProfile:
+def extract_profile(text: str, model=False, threshold: Optional[float] = None, tagger=False) -> ClientProfile:
     """Extract a client profile. Rules only by default.
+
+    tagger=True lets the trained tagger (see tagger.py) fill what the rules left
+    empty; a tagger object can be passed instead (used in tests).
 
     model=True adds the optional embedding layer (see semantic.py) for label
     fields the rules left empty; a callable can be passed instead to use a
@@ -657,6 +660,10 @@ def extract_profile(text: str, model=False, threshold: Optional[float] = None) -
     similarity cut-off of the model layer.
     """
     profile = _rules_profile(text)
+    if tagger:
+        from .tagger import add_tagger_values
+
+        add_tagger_values(profile, text, None if tagger is True else tagger)
     if model:
         from .semantic import DEFAULT_THRESHOLD, add_model_values
 

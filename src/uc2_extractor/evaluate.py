@@ -52,7 +52,7 @@ def _rate_rows(counts: dict, keys) -> list[dict]:
     return rows
 
 
-def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame, model=False, threshold=None):
+def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame, model=False, threshold=None, tagger=False):
     gold = {(r.id, r.field): r.gold_value for r in labels.itertuples()}
 
     by_field = {f: (Counts(), Counts()) for f in ALL_FIELDS}
@@ -62,7 +62,7 @@ def evaluate(enquiries: pd.DataFrame, labels: pd.DataFrame, model=False, thresho
     evidence_problems = []
 
     for row in enquiries.itertuples():
-        profile = extract_profile(row.text, model=model, threshold=threshold)
+        profile = extract_profile(row.text, model=model, threshold=threshold, tagger=tagger)
         evidence_problems += [f"{row.id}: {p}" for p in check_evidence(profile, row.text)]
         pred = profile_to_values(profile)
         lang = row.language
@@ -156,6 +156,7 @@ def main(argv=None) -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--show-all", action="store_true", help="print every error, not just the first 40")
     parser.add_argument("--model", action="store_true", help="add the optional embedding layer (rules + model)")
+    parser.add_argument("--tagger", action="store_true", help="let the trained tagger fill empty fields (rules_tagger)")
     parser.add_argument("--threshold", type=float, default=None, help="similarity cut-off for the model layer")
     parser.add_argument("--sweep", default=None,
                         help="comma-separated thresholds; prints a summary per threshold and exits "
@@ -172,9 +173,9 @@ def main(argv=None) -> int:
         print(sweep(enquiries, labels, [float(x) for x in args.sweep.split(",")]).to_string(index=False))
         return 0
     field_table, field_lang_table, lang_table, error_table, evidence_problems = evaluate(
-        enquiries, labels, model=args.model, threshold=args.threshold
+        enquiries, labels, model=args.model, threshold=args.threshold, tagger=args.tagger
     )
-    print("Mode: " + ("rules + model" if args.model else "rules only")
+    print("Mode: " + ("rules + tagger" if args.tagger else "rules + model" if args.model else "rules only")
           + (f" (threshold {args.threshold})" if args.model and args.threshold is not None else ""))
 
     print(f"Gold set: {len(enquiries)} enquiries "
