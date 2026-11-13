@@ -349,3 +349,35 @@ def test_demo_post_predict_works(demo):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_why_this_price_swaps_each_input_for_its_typical_value():
+    import pandas as pd
+
+    from src.uc21_rates import explain as E
+    from src.uc21_rates.data import MODEL_DIR
+
+    train = pd.DataFrame({"hotel": ["City Hotel", "City Hotel", "Resort Hotel"], "arrival_month": [5, 5, 8],
+                          "stays_in_weekend_nights": [1, 0, 2], "stays_in_week_nights": [2, 3, 5], "adults": [2, 2, 1],
+                          "children": [0, 1, 0], "reserved_room_type": ["A", "A", "D"], "meal": ["BB", "HB", "BB"],
+                          "distribution_channel": ["TA/TO"] * 3, "lead_time": [10, 30, 200],
+                          "market_segment": ["Online TA"] * 3, "customer_type": ["Transient"] * 3,
+                          "is_repeated_guest": [0, 0, 1], "required_car_parking_spaces": [0, 0, 1],
+                          "total_of_special_requests": [0, 1, 2], "babies": [0, 0, 0]})
+    typical = E.typical_values(train)
+    assert typical["hotel"] == "City Hotel" and typical["arrival_month"] == 5 and typical["nights"] == 3
+    assert typical["lead_time"] == 30 and typical["room_type"] == "A" and typical["meal"] == "BB"
+
+    if not (MODEL_DIR / E.TYPICAL_FILE).exists() or not (MODEL_DIR / "meta.json").exists():
+        pytest.skip("models or typical values not made on this machine")
+    from src.uc21_rates.predict import predict_rate
+
+    booking = {"hotel": "Resort Hotel", "arrival_date": "2017-08-12", "nights": 7, "adults": 2, "children": 1,
+               "room_type": "D", "meal": "HB", "channel": "TA/TO", "lead_time": 120}
+    rows = E.explain(booking)
+    assert [abs(r["change"]) for r in rows] == sorted((abs(r["change"]) for r in rows), reverse=True)
+    stored = E._typical(str(MODEL_DIR.resolve()))
+    hotel = next(r for r in rows if r["input"] == "hotel")
+    swapped = predict_rate({**booking, "hotel": stored["hotel"]})["rate"]
+    assert hotel["change"] == pytest.approx(predict_rate(booking)["rate"] - swapped, abs=0.011)
+    assert all(r["change"] == 0 for r in rows if r["value"] == r["typical"])

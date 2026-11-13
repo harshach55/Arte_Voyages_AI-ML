@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "app"))
 from uc2_info import INFO_CSS, INFO_JS  # noqa: E402
 
 from src.uc21_rates import predict as P  # noqa: E402
+from src.uc21_rates import explain as E  # noqa: E402
 from src.uc21_rates.data import MODEL_DIR  # noqa: E402
 
 MAX_BODY = 4096
@@ -70,6 +71,14 @@ PAGE = """<!DOCTYPE html>
   .small { font-size: 19px; color: #444; }
   .error { color: #9b1c1c; font-weight: bold; }
 __INFO_CSS__
+  .why { list-style: none; padding: 0; margin: 8px 0; }
+  .why li { display: grid; grid-template-columns: minmax(220px, 38%) 1fr 170px; gap: 12px; align-items: center;
+            padding: 6px 0; border-bottom: 1px solid #e3e3e3; }
+  .why-track { background: #f0f0f0; border-radius: 4px; height: 18px; }
+  .why-bar { display: block; height: 18px; border-radius: 4px; }
+  .why-bar.up { background: #c2410c; }
+  .why-bar.down { background: #1f4e8c; }
+  .why-num { text-align: right; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -100,6 +109,13 @@ __INFO_CSS__
       <div>Predicted nightly rate<span data-info-slot="rate"></span></div>
       <div class="big" id="rate"></div>
       <div>10-90% range<span data-info-slot="range"></span>: <strong id="range"></strong></div>
+    </div>
+    <div id="why-box">
+      <h2>Why this price?</h2>
+      <p class="small">How each input moves this prediction (what-if, not a guarantee): each input is swapped for the
+        typical value in the 2015-2016 training bookings and the same model predicts again.</p>
+      <ul id="why" class="why"></ul>
+      <p id="why-same" class="small"></p>
     </div>
     <h2>Same booking in each month of 2017<span data-info-slot="season"></span></h2>
     <p class="small">Line: predicted rate. Shaded band: 10-90% range. Orange point: the month of your arrival date.</p>
@@ -202,8 +218,30 @@ async function estimate(event) {
 }
 document.getElementById("booking").addEventListener("submit", estimate);
 
+function showWhy(rows) {
+  const list = document.getElementById("why");
+  list.replaceChildren();
+  const moved = rows.filter(r => r.change !== 0);
+  const same = rows.filter(r => r.change === 0).map(r => r.label);
+  const biggest = Math.max(1, ...moved.map(r => Math.abs(r.change)));
+  for (const r of moved) {
+    const li = el("li");
+    li.appendChild(el("span", r.label + ": " + r.value + " (typical " + r.typical + ")", "why-label"));
+    const track = el("span", null, "why-track");
+    const bar = el("span", null, "why-bar " + (r.change > 0 ? "up" : "down"));
+    bar.style.width = Math.max(2, Math.abs(r.change) / biggest * 100) + "%";
+    track.appendChild(bar);
+    li.appendChild(track);
+    li.appendChild(el("span", (r.change > 0 ? "+" : "\u2212") + eur(Math.abs(r.change)) + " EUR", "why-num"));
+    list.appendChild(li);
+  }
+  if (!rows.length) list.appendChild(el("li", "Not available (typical values not saved yet)."));
+  document.getElementById("why-same").textContent = same.length ? "Already the typical value: " + same.join(", ") + "." : "";
+}
+
 function showResult(out, month) {
   const p = out.prediction;
+  showWhy(out.explain || []);
   document.getElementById("rate").textContent = eur(p.rate) + " " + p.currency;
   document.getElementById("range").textContent = eur(p.low) + " to " + eur(p.high) + " " + p.currency;
   drawChart(out.seasonality, month);
@@ -378,7 +416,8 @@ def handle_predict(data, model_dir=MODEL_DIR) -> tuple[int, dict]:
     if not isinstance(data, dict):
         return 400, {"error": "send the booking as a JSON object"}
     try:
-        return 200, {"prediction": P.predict_rate(data, model_dir), "seasonality": P.seasonality(data, model_dir)}
+        return 200, {"prediction": P.predict_rate(data, model_dir), "seasonality": P.seasonality(data, model_dir),
+                     "explain": E.explain(data, model_dir)}
     except ValueError as err:
         return 400, {"error": str(err)}
 
