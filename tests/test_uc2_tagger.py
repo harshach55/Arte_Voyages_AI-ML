@@ -445,3 +445,44 @@ def test_v2_name_picks_the_second_tagger(monkeypatch):
 
     monkeypatch.setattr(tagger, "default_tagger_v2", lambda: "second")
     assert tagger.resolve("v2") == "second"
+
+
+# --- field-selective mode -------------------------------------------------------------------------
+
+
+def test_field_selective_tagger_keeps_only_allowed_labels():
+    from src.uc2_extractor.tagger import FieldSelectiveTagger
+
+    base = LabelFake({"Zanzibar Bay": "DESTINATION", "big cats": "INTEREST"}, {"big cats": "wildlife"})
+    p = ClientProfile(language="en")
+    add_tagger_values(p, "Zanzibar Bay and big cats", FieldSelectiveTagger(base, ["INTEREST"]))
+    assert p.destination == [] and p.interests == ["wildlife"]
+
+
+def test_with_no_allowed_label_the_profile_equals_rules_only():
+    from src.uc2_extractor.tagger import FieldSelectiveTagger
+
+    text = "We would like to visit Zanzibar Bay from Porto with coach seats."
+    selective = FieldSelectiveTagger(FakeTagger(TAGS), [])
+    assert extract_profile(text, tagger=selective).model_dump() == extract_profile(text).model_dump()
+
+
+def test_field_choice_needs_strictly_better_gold_scores():
+    from src.uc2_extractor.metrics import Counts
+    from src.uc2_extractor.training import select_fields as S
+
+    def counts(tp, fp, fn):
+        table = {(f, lang): Counts() for unit in S.UNITS.values() for f in unit[0] for lang in ("en", "fr", "de")}
+        table[("interests", "en")] = Counts(tp=tp, fp=fp, fn=fn)
+        return table
+
+    assert S.select(counts(5, 1, 2), counts(6, 1, 1))["interests"]["chosen"] is True   # better
+    assert S.select(counts(5, 1, 2), counts(5, 1, 2))["interests"]["chosen"] is False  # a tie is not chosen
+    assert S.select(counts(5, 1, 2), counts(5, 2, 2))["interests"]["chosen"] is False  # worse
+
+
+def test_field_choice_refuses_a_held_out_set(capsys):
+    from src.uc2_extractor.training import select_fields as S
+
+    assert S.main(["--gold-dir", "data/uc2_inquiries/heldout"]) == 2
+    assert "gold set only" in capsys.readouterr().out

@@ -56,6 +56,7 @@ MODEL_FILE = MODEL_DIR / "crf_tagger.crfsuite"
 INFO_FILE = MODEL_DIR / "crf_tagger.json"
 MODEL_FILE_V2 = MODEL_DIR / "crf_tagger_v2.crfsuite"
 INFO_FILE_V2 = MODEL_DIR / "crf_tagger_v2.json"
+FIELDS_FILE_V2 = MODEL_DIR / "crf_tagger_v2_fields.json"  # written by training/select_fields.py (gold set only)
 # Fixed in advance and not tuned: keep a span only if the tagger finds it more likely than not.
 MIN_CONFIDENCE = 0.5
 MIN_LABEL_PROBABILITY = 0.5  # same rule for the span-to-label classifier
@@ -161,18 +162,45 @@ def default_tagger_v2() -> CrfTagger:
     return CrfTagger(MODEL_FILE_V2)
 
 
+class FieldSelectiveTagger:
+    """A tagger limited to some labels: the fields where it beat the rules on the gold set."""
+
+    def __init__(self, base, labels):
+        self.base = base
+        self.allowed = set(labels)
+
+    def predict(self, words, language):
+        return self.base.predict(words, language)
+
+    def labels_for(self, language) -> set[str]:
+        return self.base.labels_for(language) & self.allowed
+
+    def label_for(self, label, text):
+        return self.base.label_for(label, text) if hasattr(self.base, "label_for") else (None, 0.0)
+
+
+@lru_cache(maxsize=1)
+def default_tagger_v2_selective() -> FieldSelectiveTagger:
+    info = json.loads(FIELDS_FILE_V2.read_text(encoding="utf-8"))
+    return FieldSelectiveTagger(default_tagger_v2(), info["labels"])
+
+
 def resolve(tagger):
-    """True, None or "v1" mean the first tagger, "v2" the second; anything else is a tagger object."""
+    """True, None or "v1" mean the first tagger, "v2" the second, "v2_selective" the second limited to the
+    fields chosen on the gold set; anything else is a tagger object."""
     if tagger in (None, True, "v1"):
         return default_tagger()
     if tagger == "v2":
         return default_tagger_v2()
+    if tagger == "v2_selective":
+        return default_tagger_v2_selective()
     return tagger
 
 
 def check_tagger(version: str = "v1") -> tuple[bool, str]:
     """Load a tagger once and report whether it can be used."""
-    name = "Trained tagger" if version == "v1" else "New tagger (public + synthetic data)"
+    name = {"v1": "Trained tagger", "v2": "New tagger (public + synthetic data)",
+            "v2_selective": "New tagger, field-selective"}.get(version, version)
     try:
         resolve(version).predict(["warm-up"], "en")
         return True, f"{name} available."

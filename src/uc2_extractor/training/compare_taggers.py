@@ -26,14 +26,14 @@ from pathlib import Path
 from ..evaluate import LANGS, load_gold
 from ..extract import extract_profile
 from ..metrics import ALL_FIELDS, fmt
-from ..tagger import MODEL_DIR, default_tagger, default_tagger_v2, tagger_profile
+from ..tagger import FIELDS_FILE_V2, MODEL_DIR, default_tagger, default_tagger_v2, default_tagger_v2_selective, tagger_profile
 from . import train_crf
 from .compare_tagger import count, pooled, table
 
 SETS = {"gold": (Path("data/uc2_inquiries/gold"), "Gold set (60 enquiries): seen before, optimistic"),
         "heldout": (Path("data/uc2_inquiries/heldout"), "Held-out set 1 (45 enquiries): seen before, optimistic")}
 SYNTHETIC_TITLE = "Synthetic test split: synthetic, optimistic"
-MODES = ("rules only", "v1 only", "v2 only", "rules + v1", "rules + v2")
+MODES = ("rules only", "v1 only", "v2 only", "rules + v1", "rules + v2", "rules + v2 selective")
 HEADING = "## Second tagger (public + synthetic data) compared with the first"
 SUMMARY_FILE = MODEL_DIR / "comparison_v2.json"
 
@@ -49,11 +49,12 @@ def training_summary() -> dict:
     return out
 
 
-def score_set(path: Path, v1, v2) -> dict:
+def score_set(path: Path, v1, v2, v2s) -> dict:
     enquiries, labels = load_gold(path)
     extractors = {"rules only": extract_profile, "v1 only": lambda t: tagger_profile(t, v1),
                   "v2 only": lambda t: tagger_profile(t, v2), "rules + v1": lambda t: extract_profile(t, tagger=v1),
-                  "rules + v2": lambda t: extract_profile(t, tagger=v2)}
+                  "rules + v2": lambda t: extract_profile(t, tagger=v2),
+                  "rules + v2 selective": lambda t: extract_profile(t, tagger=v2s)}
     result = {"fields": {}, "languages": {}, "errors": {}}
     for mode in MODES:
         counts, errors = count(enquiries, labels, extractors[mode])
@@ -81,7 +82,7 @@ def score_synthetic(v1, v2) -> dict:
 def worse_fields(result: dict) -> list[str]:
     out = []
     for f, row in result["fields"].items():
-        for a, b in (("rules + v1", "rules + v2"), ("v1 only", "v2 only")):
+        for a, b in (("rules + v1", "rules + v2"), ("v1 only", "v2 only"), ("rules only", "rules + v2 selective")):
             if row[a] != "-" and row[b] != "-" and float(row[b]) < float(row[a]):
                 out.append(f"{f} ({b} {row[b]} against {a} {row[a]})")
     return out
@@ -97,7 +98,13 @@ def build_report(summary: dict) -> str:
            "Nothing was tuned on any of these sets: c1 and c2 were chosen on the development split.", "",
            "v1 = first tagger, public data only. v2 = second tagger, public data plus 900 synthetic enquiries "
            "(80% training, 10% development, 10% test). French and German synthetic text has not been checked by a "
-           "native speaker.", "", "Training data (training part, examples):", ""]
+           "native speaker.", "",
+           "rules + v2 selective = the second tagger may only fill empty fields in the units where it beat the rules "
+           "on the gold set (exact-match F1, strictly better, decided on the gold set only, never on held-out set 1). "
+           f"Units chosen: {', '.join(summary['selection']['chosen']) or 'none'}. "
+           + ("With no unit chosen, this mode gives the same values as rules only. " if not summary['selection']['chosen'] else "")
+           + "Because the list was chosen on the gold set, its gold numbers are optimistic twice over.", "",
+           "Training data (training part, examples):", ""]
     rows = []
     for key in sorted(set(t["v1"]["train"]) | set(t["v2"]["train"])):
         rows.append([key, t["v1"]["train"].get(key, 0), t["v2"]["train"].get(key, 0)])
@@ -132,11 +139,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    v1, v2 = default_tagger(), default_tagger_v2()
+    v1, v2, v2s = default_tagger(), default_tagger_v2(), default_tagger_v2_selective()
+    selection = json.loads(FIELDS_FILE_V2.read_text(encoding="utf-8"))
     summary = {"training": training_summary(), "synthetic": score_synthetic(v1, v2),
+               "selection": {"chosen": selection["chosen"], "rule": selection["rule"],
+                             "decided_on": selection["decided_on"]},
                "titles": {**{k: v[1] for k, v in SETS.items()}, "synthetic": SYNTHETIC_TITLE}}
     for key, (path, _) in SETS.items():
-        summary[key] = score_set(path, v1, v2)
+        summary[key] = score_set(path, v1, v2, v2s)
     SUMMARY_FILE.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     report = build_report(summary)
     print(report)
