@@ -125,3 +125,94 @@ def test_bad_corrections_are_refused_and_not_saved(tmp_path, data, message):
     status, body = demo.handle_save(data, False, path)
     assert status == 400 and message in body["error"]
     assert not path.exists()
+
+
+# --- rules + trained tagger -----------------------------------------------------------------------
+
+
+class FakeTagger:
+    """Marks the word Zanzibar as a destination and "just me" as the party."""
+
+    def labels_for(self, language):
+        return {"DESTINATION", "PARTY"}
+
+    def predict(self, words, language):
+        tags = ["O"] * len(words)
+        for i, word in enumerate(words):
+            if word == "Zanzibar":
+                tags[i] = "B-DESTINATION"
+            elif word == "just" and words[i + 1:i + 2] == ["me"]:
+                tags[i:i + 2] = ["B-PARTY", "I-PARTY"]
+        return tags, [0.82] * len(words)
+
+
+TAGGED = "We would like to see Zanzibar, it is just me from the office."
+
+
+@pytest.fixture
+def tagger_on(monkeypatch):
+    from src.uc2_extractor import tagger
+
+    monkeypatch.setattr(tagger, "default_tagger", lambda: FakeTagger())
+
+
+def test_page_offers_the_third_mode_and_can_show_the_crf_tag():
+    page = demo.render_page(demo.SAMPLES, False, "x", True, "Trained tagger available.").decode("utf-8")
+    assert 'value="tagger"' in page and "rules + trained tagger" in page
+    assert '"tag crf"' in page and "Trained tagger available." in page
+
+
+def test_page_shows_every_pipeline_stage_in_order():
+    page = demo.render_page(demo.SAMPLES, False, "x", True, "y").decode("utf-8")
+    assert ">Pipeline<" in page
+    stages = ["Language detection", "Trained tagger", "Rules and normalisers", "Optional embedding model",
+              "Schema output", "Review screen"]
+    assert [s["name"] for s in demo.PIPELINE] == stages
+    assert all(f'"{s}"' in page for s in stages)
+
+
+def test_components_say_what_is_trained_rules_and_pending():
+    kinds = {c["kind"] for c in demo.components(True)}
+    assert {"trained", "rules", "pending"} <= kinds
+    assert demo.components(True)[0]["name"] == "Slot tagger (CRF)"
+    assert all(c["kind"] in demo.KIND_NAMES for c in demo.PIPELINE + demo.components(True))
+
+
+def test_a_missing_tagger_shows_as_pending_and_its_mode_is_off():
+    assert demo.components(False)[0]["kind"] == "pending"
+    page = demo.render_page(demo.SAMPLES, False, "x").decode("utf-8")
+    assert '"available": false' in page
+
+
+def test_tagger_values_show_the_crf_tag(tagger_on):
+    data = demo.build_response(TAGGED, False, True)
+    row = next(r for r in data["rows"] if r["label"] == "Destination")
+    assert row["items"] == [{"text": "Zanzibar", "source": "crf", "confidence": 0.82}]
+    assert row["evidence"] == [{"text": "Zanzibar", "source": "crf"}]
+    travellers = next(r for r in data["rows"] if r["label"] == "Travellers")
+    assert travellers["items"][0]["source"] == "crf" and travellers["items"][0]["confidence"] == 0.82
+
+
+def test_a_section_with_rule_and_tagger_values_shows_both(tagger_on):
+    data = demo.build_response("It is just me and 1 child this time", False, True)
+    travellers = next(r for r in data["rows"] if r["label"] == "Travellers")
+    assert travellers["items"][0]["source"] == "rule+crf"
+
+
+def test_rules_only_is_unchanged_when_the_tagger_is_off(tagger_on):
+    assert demo.build_response(TAGGED, False)["values"]["destination"] == ""
+
+
+def test_batch_marks_tagger_sections_in_the_text(tagger_on):
+    row = demo.build_batch([TAGGED], False, True)[0]
+    assert row["destination"][0]["source"] == "crf"
+    assert row["travellers"].endswith("(crf)")
+
+
+def test_saved_correction_recomputes_with_the_tagger(tagger_on, tmp_path):
+    path = tmp_path / "corrections.jsonl"
+    values = demo.build_response(TAGGED, False, True)["values"]
+    status, _ = demo.handle_save({"text": TAGGED, "mode": "tagger", "corrected": values}, False, path, True)
+    assert status == 200
+    saved = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert "Zanzibar" in json.dumps(saved)

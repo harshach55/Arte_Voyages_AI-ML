@@ -4,15 +4,16 @@ Run from the project root:
     python app/uc2_web_demo.py            (then open http://localhost:8000)
     python app/uc2_web_demo.py --port 8080
 
-Features: one enquiry or several (one per line), rules only or rules plus the
-optional model layer, a rule/model tag with confidence on every value, and the
-evaluation scores.
+Features: one enquiry or several (one per line), three modes (rules only, rules
+plus the trained tagger, rules plus the optional model layer), a rule/crf/model
+tag with confidence on every value, the pipeline with a status for each
+component, and the evaluation scores.
 
 The server only listens on this computer (127.0.0.1). The page inserts all
 results with textContent, never as HTML, so pasted text cannot run as code.
 The gold-set sample is read from data/uc2_inquiries/gold/ at start-up and is
 not stored in this file; if that file is missing the button is disabled. If
-the model files are missing, the demo runs rules only and says so.
+the model or tagger files are missing, the demo says so and that mode is off.
 """
 
 from __future__ import annotations
@@ -28,6 +29,9 @@ from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "app"))
+
+from uc2_info import INFO_CSS, info_script  # noqa: E402
 
 from src.uc2_extractor import lexicon as lx  # noqa: E402
 from src.uc2_extractor.corrections import (  # noqa: E402
@@ -39,6 +43,7 @@ from src.uc2_extractor.corrections import (  # noqa: E402
 from src.uc2_extractor.extract import extract_profile  # noqa: E402
 from src.uc2_extractor.metrics import ALL_FIELDS, profile_to_values  # noqa: E402
 from src.uc2_extractor.schema import ClientProfile, PartialDate, load_band_config  # noqa: E402
+from src.uc2_extractor.tagger import INFO_FILE, check_tagger  # noqa: E402
 
 GOLD_FILE = ROOT / "data" / "uc2_inquiries" / "gold" / "enquiries.csv"
 GOLD_SAMPLE_ID = "P02-en"  # honeymoon enquiry with a GBP budget and an ambiguous date
@@ -52,6 +57,8 @@ SAMPLES = [
      "text": "Nous sommes deux adultes et deux enfants, nous voulons visiter le Rajasthan pendant dix nuits"},
     {"label": "German: 3/4 dates",
      "text": "Wir reisen vom 3/4 bis 10/4, zwei Erwachsene, vegetarisch"},
+    {"label": "English: tagger fills gaps", "mode": "tagger",
+     "text": "We would like to fly to Zanzibar on May 9th in coach, for two people."},
 ]
 
 # Copied from docs/uc2_results.md (F1, all fields pooled, exact match).
@@ -68,11 +75,60 @@ SCORES = {
         "rows": [
             ["Held-out set, rules after improvements", "0.87", "0.91", "0.93"],
             ["Held-out set, rules + model (threshold 0.88)", "0.87", "0.92", "0.94"],
+            ["Held-out set, rules + trained tagger", "0.87", "0.91", "0.93"],
             ["Gold set (60 enquiries), rules", "0.96", "0.98", "0.98"],
         ],
+        "tagger": "The tagger never saw this set, but the rules were tuned on it, so the comparison favours the rules. "
+                  "The tagger added 1 correct and 2 wrong values (74 field errors became 75).",
     },
     "next": "The next real number will come from a second held-out set written by colleagues, scored once at the end.",
 }
+
+TAGGER_HELD_OUT = "On held-out set 1 it added 1 correct and 2 wrong values."
+
+# What happens to an enquiry, in order.
+PIPELINE = [
+    {"name": "Language detection", "kind": "rules", "detail": "Stopwords and letters: English, French or German."},
+    {"name": "Trained tagger", "kind": "trained", "detail": "A CRF marks spans, each with a probability."},
+    {"name": "Rules and normalisers", "kind": "rules",
+     "detail": "Rule values win. Tagger spans fill only what is empty. Dates, numbers and currency are normalised."},
+    {"name": "Optional embedding model", "kind": "pretrained",
+     "detail": "Off by default. Fills empty label fields in rules + model mode."},
+    {"name": "Schema output", "kind": "built", "detail": "Validated JSON, with the source text of each value."},
+    {"name": "Review screen", "kind": "built", "detail": "A person corrects values. Corrections are saved locally."},
+]
+KIND_NAMES = {"trained": "Trained", "rules": "Rules", "pretrained": "Pretrained", "built": "Built", "pending": "Pending"}
+OTHER_COMPONENTS = [
+    {"name": "Language detection", "kind": "rules", "detail": "Stopword counts and letter hints."},
+    {"name": "Field extractors and word lists", "kind": "rules", "detail": "Hand-written patterns for all fields."},
+    {"name": "Date, number and currency normalisers", "kind": "rules", "detail": "Hand-written; also read the tagger's spans."},
+    {"name": "Budget bands", "kind": "rules", "detail": "Edges are placeholders, not real company bands."},
+    {"name": "Embedding model (MiniLM, ONNX)", "kind": "pretrained",
+     "detail": "Used as downloaded, not trained here. Off by default."},
+    {"name": "Schema, API and review screen", "kind": "built", "detail": "Ordinary software, no learning."},
+    {"name": "Transformer tagger (XLM-RoBERTa)", "kind": "pending", "detail": "Not started. Waiting on the Colab decision."},
+    {"name": "Synthetic training data", "kind": "pending",
+     "detail": "Generator unfinished, so the tagger has no examples of ages, budget, interests, dietary, occasion or requests."},
+    {"name": "Held-out set 2", "kind": "pending", "detail": "Colleagues have not written it yet; never scored."},
+    {"name": "Label checks and French and German native review", "kind": "pending", "detail": "Not done."},
+]
+
+
+def components(tagger_available: bool) -> list[dict]:
+    """The status list. The tagger's numbers are read from its training report, not typed in here."""
+    tagger = {"name": "Slot tagger (CRF)", "kind": "pending", "detail": "Model file not found."}
+    if tagger_available:
+        tagger.update(kind="trained", detail="Trained here on public data.")
+        try:
+            info = json.loads(INFO_FILE.read_text(encoding="utf-8"))
+            f1 = [info["dev_report"][lang]["ALL"]["f1"] for lang in ("en", "fr", "de")]
+            tagger["detail"] = (f"Trained here on {info['train_examples']:,} public examples. English has 9 labels; "
+                                f"French and German have dates only. Development F1: en {f1[0]:.2f}, fr {f1[1]:.2f}, "
+                                f"de {f1[2]:.2f}. {TAGGER_HELD_OUT}")
+        except (OSError, KeyError, ValueError):
+            pass
+    return [tagger] + OTHER_COMPONENTS
+
 
 # Field list and allowed values for the review-and-correct form.
 CORRECTION_FIELDS = [
@@ -218,6 +274,15 @@ def describe_sections(p: ClientProfile) -> dict[str, str]:
     return out
 
 
+def section_source(p: ClientProfile, key: str) -> tuple[str, Optional[float]]:
+    """Where a section's text came from. A section can mix rule values and tagger values."""
+    crf = [x.confidence for x in p.provenance if x.field == key and x.source == "crf"]
+    if not crf:
+        return "rule", None
+    has_rule = any(x.field == key and x.source == "rule" for x in p.provenance)
+    return ("rule+crf" if has_rule else "crf"), min(crf)
+
+
 def build_rows(p: ClientProfile) -> list[dict]:
     """One row per field: items with their source and confidence, and the evidence."""
     sections = describe_sections(p)
@@ -238,19 +303,21 @@ def build_rows(p: ClientProfile) -> list[dict]:
                     "confidence": prov.confidence if prov else None,
                 })
         else:
-            items = [{"text": sections[key], "source": "rule", "confidence": None}] if sections[key] else []
+            origin, confidence = section_source(p, key)
+            items = [{"text": sections[key], "source": origin, "confidence": confidence}] if sections[key] else []
         rows.append({"label": label, "items": items, "evidence": evidence.get(key, [])})
     return rows
 
 
-def build_response(text: str, use_model: bool) -> dict:
-    profile = extract_profile(text, model=use_model)
+def build_response(text: str, use_model: bool, use_tagger: bool = False) -> dict:
+    profile = extract_profile(text, model=use_model, tagger=use_tagger)
     flags = [{"field": f.field.replace("_", " "), "kind": f.kind, "message": f.message} for f in profile.flags]
     return {"rows": build_rows(profile), "flags": flags, "profile": profile.model_dump(mode="json"),
             "values": profile_to_values(profile)}
 
 
-def handle_save(data: Optional[dict], model_available: bool, path: Path = CORRECTIONS_FILE) -> tuple[int, dict]:
+def handle_save(data: Optional[dict], model_available: bool, path: Path = CORRECTIONS_FILE,
+                tagger_available: bool = False) -> tuple[int, dict]:
     """Save one correction. The extracted profile is recomputed from the text on
     the server, so the saved 'extracted' part cannot be altered in the browser."""
     if not isinstance(data, dict):
@@ -262,7 +329,8 @@ def handle_save(data: Optional[dict], model_available: bool, path: Path = CORREC
     if not isinstance(corrected, dict) or not all(isinstance(v, str) for v in corrected.values()):
         return 400, {"error": "'corrected' must map field names to text values"}
     use_model = data.get("mode") == "model" and model_available
-    extracted = extract_profile(text, model=use_model)
+    use_tagger = data.get("mode") == "tagger" and tagger_available
+    extracted = extract_profile(text, model=use_model, tagger=use_tagger)
     try:
         count = save_correction(text, extracted, corrected, path)
     except CorrectionError as exc:
@@ -270,13 +338,16 @@ def handle_save(data: Optional[dict], model_available: bool, path: Path = CORREC
     return 200, {"count": count}
 
 
-def build_batch(texts: list[str], use_model: bool) -> list[dict]:
+def build_batch(texts: list[str], use_model: bool, use_tagger: bool = False) -> list[dict]:
     """A short summary row per enquiry for the several-enquiries table."""
     out = []
     for i, text in enumerate(texts, 1):
-        p = extract_profile(text, model=use_model)
+        p = extract_profile(text, model=use_model, tagger=use_tagger)
         sections = describe_sections(p)
         source = {(x.field, x.value): x for x in p.provenance}
+
+        def shown(key):  # batch cells are plain text, so a tagger value is marked in the text
+            return f"{sections[key]} (crf)" if sections[key] and section_source(p, key)[0] != "rule" else sections[key]
 
         def items(key):
             return [{"text": v, "source": source[(key, v)].source if (key, v) in source else "rule",
@@ -292,9 +363,9 @@ def build_batch(texts: list[str], use_model: bool) -> list[dict]:
             "text": text,
             "language": p.language or "",
             "destination": items("destination"),
-            "dates": sections["dates"],
-            "travellers": sections["travellers"],
-            "budget": sections["budget"],
+            "dates": shown("dates"),
+            "travellers": shown("travellers"),
+            "budget": shown("budget"),
             "details": details,
             "flags": len(p.flags),
         })
@@ -337,6 +408,18 @@ PAGE = """<!doctype html>
          vertical-align: middle; white-space: nowrap; }
   .tag.rule { background: #e6e6e6; color: #333; }
   .tag.model { background: #dbe8ff; color: #123a7a; border: 1px solid #7a9fd6; }
+  .tag.crf { background: #d7f0dc; color: #14532d; border: 1px solid #5fa873; }
+  .stages { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 10px 0; align-items: stretch; }
+  .stage { flex: 1 1 150px; border: 2px solid #1f4e8c; border-radius: 6px; padding: 8px 10px; background: #f5f8fc;
+           font-size: 16px; line-height: 1.3; }
+  .stage strong { display: block; font-size: 17px; margin-bottom: 2px; }
+  .arrow { align-self: center; font-size: 22px; color: #1f4e8c; }
+  .badge { font-size: 14px; padding: 1px 7px; border-radius: 4px; white-space: nowrap; display: inline-block; }
+  .badge.trained { background: #d7f0dc; color: #14532d; }
+  .badge.rules { background: #e6e6e6; color: #333; }
+  .badge.pretrained { background: #dbe8ff; color: #123a7a; }
+  .badge.built { background: #ece6f7; color: #3f2a78; }
+  .badge.pending { background: #fff4d6; color: #7a5200; }
   .notice { padding: 10px 14px; border-radius: 6px; background: #f2f2f2; border: 1px solid #ccc; }
   .notice.warn { background: #fff4d6; border-color: #e0a100; }
   .flags { margin-top: 22px; padding: 14px 18px; background: #fff4d6; border: 2px solid #e0a100;
@@ -364,6 +447,7 @@ PAGE = """<!doctype html>
   .hint { font-size: 15px; color: #666; }
   .saved { font-weight: bold; color: #1d6b2c; }
   footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #ccc; color: #555; font-size: 17px; }
+__INFO_CSS__
 </style>
 </head>
 <body>
@@ -374,10 +458,11 @@ PAGE = """<!doctype html>
   <div class="controls">
     <span><strong>Input:</strong>
       <label><input type="radio" name="input" value="one" checked> one enquiry</label>
-      <label><input type="radio" name="input" value="many"> several enquiries, one per line</label>
+      <label><input type="radio" name="input" value="many"> several enquiries, one per line</label><span data-info-slot="several"></span>
     </span>
-    <span><strong>Mode:</strong>
+    <span><strong>Mode:</strong><span data-info-slot="mode"></span>
       <label><input type="radio" name="mode" value="rules" checked> rules only</label>
+      <label id="tagger-choice"><input type="radio" name="mode" value="tagger"> rules + trained tagger</label>
       <label id="model-choice"><input type="radio" name="mode" value="model"> rules + model</label>
     </span>
   </div>
@@ -389,12 +474,15 @@ PAGE = """<!doctype html>
   <p id="status"></p>
 
   <div id="single" hidden>
+    <p class="small">Tags: <span class="tag rule">rule</span><span data-info-slot="tag_rule"></span>
+      <span class="tag model">model 0.xx</span><span data-info-slot="tag_model"></span>
+      <span class="tag crf">crf 0.xx</span><span data-info-slot="tag_crf"></span></p>
     <table>
-      <thead><tr><th>Field</th><th>Value</th><th>Taken from the text</th></tr></thead>
+      <thead><tr><th>Field</th><th>Value</th><th>Taken from the text<span data-info-slot="source"></span></th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     <div class="flags">
-      <h3>Check these</h3>
+      <h3>Check these<span data-info-slot="flags"></span></h3>
       <ul id="flags"></ul>
     </div>
     <p><button id="toggle-json">Show raw JSON</button></p>
@@ -406,13 +494,13 @@ PAGE = """<!doctype html>
         Lists can take several values.</p>
       <table><tbody id="review-rows"></tbody></table>
       <p>
-        <button class="primary" id="save-corrections">Save corrections</button>
+        <button class="primary" id="save-corrections">Save corrections</button><span data-info-slot="save"></span>
         <button id="reset-corrections">Undo my changes</button>
         <span id="save-status"></span>
       </p>
     </div>
   </div>
-  <p class="small">Saved corrections: <strong id="correction-count">0</strong></p>
+  <p class="small">Saved corrections: <strong id="correction-count">0</strong><span data-info-slot="save"></span></p>
 
   <div id="batch" hidden>
     <table>
@@ -422,19 +510,36 @@ PAGE = """<!doctype html>
     </table>
   </div>
 
+  <section>
+    <h2>Pipeline<span data-info-slot="pipeline"></span></h2>
+    <ol id="pipeline" class="stages"></ol>
+    <p class="small">The rules run on every enquiry and their values always win. The tagger only fills what the rules
+      left empty. It knows nine labels in English and only dates in French and German.</p>
+    <h3>Components</h3>
+    <table>
+      <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody id="components"></tbody>
+    </table>
+  </section>
+
   <section class="scores">
     <h2>How well it works</h2>
     <p class="small">F1 score (1.00 would be perfect), all fields pooled, exact match.</p>
     <div id="scores"></div>
   </section>
 
-  <footer>Rules-based extractor with an optional model layer. Scored on our own synthetic sets. Budget bands are placeholders.</footer>
+  <footer>Rules, a trained tagger and an optional model layer. Scored on our own synthetic sets. Budget bands are placeholders.</footer>
 </main>
 <script>
+__INFO_JS__
 const SAMPLES = __SAMPLES__;
 const SCORES = __SCORES__;
 const MODEL = __MODEL__;
+const TAGGER = __TAGGER__;
 const FIELDS = __FIELDS__;
+const PIPELINE = __PIPELINE__;
+const COMPONENTS = __COMPONENTS__;
+const KIND_NAMES = __KIND_NAMES__;
 let lastRequest = null;      // {text, mode} of the enquiry shown in the review form
 let originalValues = null;   // values as extracted
 let reviewValues = null;     // values being edited
@@ -450,6 +555,8 @@ function el(tag, text, cls) {
 function choice(name) { return document.querySelector('input[name="' + name + '"]:checked').value; }
 function tag(item) {
   if (item.source === "model") return el("span", "model " + item.confidence.toFixed(2), "tag model");
+  if (item.source === "crf") return el("span", "crf " + item.confidence.toFixed(2), "tag crf");
+  if (item.source === "rule+crf") return el("span", "rule + crf " + item.confidence.toFixed(2), "tag crf");
   return el("span", "rule", "tag rule");
 }
 function itemList(items) {
@@ -466,12 +573,39 @@ function itemList(items) {
 
 // model status and toggle
 const status = document.getElementById("model-status");
-status.textContent = MODEL.message;
+status.textContent = MODEL.message + " " + TAGGER.message;
 if (!MODEL.available) {
   status.className = "notice warn";
   const radio = document.querySelector('#model-choice input');
   radio.disabled = true;
   document.getElementById("model-choice").title = "Model files not found: rules only";
+}
+if (!TAGGER.available) {
+  status.className = "notice warn";
+  document.querySelector('#tagger-choice input').disabled = true;
+  document.getElementById("tagger-choice").title = "Tagger file not found: rules only";
+}
+
+// pipeline and component status
+function badge(kind) { return el("span", KIND_NAMES[kind], "badge " + kind); }
+const stages = document.getElementById("pipeline");
+PIPELINE.forEach((s, i) => {
+  if (i) stages.appendChild(el("li", "→", "arrow"));
+  const li = el("li", null, "stage");
+  li.appendChild(el("strong", (i + 1) + ". " + s.name));
+  li.appendChild(badge(s.kind));
+  li.appendChild(el("div", s.detail));
+  stages.appendChild(li);
+});
+const componentRows = document.getElementById("components");
+for (const c of COMPONENTS) {
+  const tr = el("tr");
+  tr.appendChild(el("td", c.name, "field"));
+  const td = el("td");
+  td.appendChild(badge(c.kind));
+  tr.appendChild(td);
+  tr.appendChild(el("td", c.detail));
+  componentRows.appendChild(tr);
 }
 
 // sample buttons
@@ -484,6 +618,8 @@ for (const s of SAMPLES) {
   } else {
     b.addEventListener("click", () => {
       document.querySelector('input[name="input"][value="one"]').checked = true;
+      const wanted = s.mode ? document.querySelector('input[name="mode"][value="' + s.mode + '"]') : null;
+      if (wanted && !wanted.disabled) wanted.checked = true;
       box.value = s.text; extract();
     });
   }
@@ -495,8 +631,11 @@ for (const s of SAMPLES) {
 const scoreBox = document.getElementById("scores");
 for (const [key, cls] of [["real", "real"], ["optimistic", "opt"]]) {
   const part = SCORES[key];
-  scoreBox.appendChild(el("h3", part.title));
+  const heading = el("h3", part.title);
+  heading.appendChild(infoButton(key === "real" ? "real_number" : "optimistic"));
+  scoreBox.appendChild(heading);
   scoreBox.appendChild(el("p", part.note, "small"));
+  if (part.tagger) scoreBox.appendChild(el("p", part.tagger, "small"));
   const table = el("table", null, cls);
   const head = el("tr");
   for (const h of ["", "English", "French", "German"]) head.appendChild(el("th", h));
@@ -515,7 +654,9 @@ function showSingle(data) {
   tbody.replaceChildren();
   for (const r of data.rows) {
     const tr = el("tr");
-    tr.appendChild(el("td", r.label, "field"));
+    const name = el("td", r.label, "field");
+    for (const key of infoKeys(r.label, r.items.map(i => i.text).join(" "))) name.appendChild(infoButton(key));
+    tr.appendChild(name);
     tr.appendChild(itemList(r.items));
     const src = el("td", null, r.evidence.length ? "source" : "source empty");
     if (!r.evidence.length) src.textContent = "\\u2014";
@@ -523,6 +664,7 @@ function showSingle(data) {
       if (i) src.appendChild(document.createTextNode("  \\u00b7  "));
       src.appendChild(document.createTextNode("\\u201c" + ev.text + "\\u201d"));
       if (ev.source === "model") src.appendChild(el("span", "model", "tag model"));
+      if (ev.source === "crf") src.appendChild(el("span", "crf", "tag crf"));
     });
     tr.appendChild(src);
     tbody.appendChild(tr);
@@ -553,7 +695,10 @@ function renderReview() {
   tbody.replaceChildren();
   for (const f of FIELDS) {
     const tr = el("tr");
-    tr.appendChild(el("td", f.label, "field"));
+    const name = el("td", f.label, "field");
+    const infoKey = {language: "language", dates_ambiguous: "unclear_dates", budget_band: "budget_band"}[f.name];
+    if (infoKey) name.appendChild(infoButton(infoKey));
+    tr.appendChild(name);
     const td = el("td");
     if (f.kind === "select") {
       const sel = el("select");
@@ -698,18 +843,19 @@ async function extract() {
   const text = box.value.trim();
   if (!text) { statusLine.textContent = "Please paste an enquiry first."; return; }
   const useModel = choice("mode") === "model" && MODEL.available;
+  const useTagger = choice("mode") === "tagger" && TAGGER.available;
   statusLine.textContent = "Extracting\\u2026";
   statusLine.className = "";
   try {
     if (choice("input") === "many") {
       const texts = text.split(/\\r?\\n/).map(t => t.trim()).filter(t => t);
-      showBatch((await post("/extract_batch", {texts, model: useModel})).rows);
+      showBatch((await post("/extract_batch", {texts, model: useModel, tagger: useTagger})).rows);
     } else {
-      const data = await post("/extract", {text, model: useModel});
-      lastRequest = {text, mode: useModel ? "model" : "rules"};
+      const data = await post("/extract", {text, model: useModel, tagger: useTagger});
+      lastRequest = {text, mode: useTagger ? "tagger" : useModel ? "model" : "rules"};
       showSingle(data);
     }
-    statusLine.textContent = "Mode used: " + (useModel ? "rules + model" : "rules only");
+    statusLine.textContent = "Mode used: " + (useTagger ? "rules + trained tagger" : useModel ? "rules + model" : "rules only");
   } catch (err) {
     statusLine.textContent = "Error: " + err.message;
     statusLine.className = "error";
@@ -733,17 +879,24 @@ def _script_json(data) -> str:
     return json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
 
 
-def render_page(samples: list[dict], model_available: bool, model_message: str) -> bytes:
+def render_page(samples: list[dict], model_available: bool, model_message: str,
+                tagger_available: bool = False, tagger_message: str = "Trained tagger not loaded.") -> bytes:
     page = PAGE.replace("__SAMPLES__", _script_json(samples))
     page = page.replace("__SCORES__", _script_json(SCORES))
     page = page.replace("__MODEL__", _script_json({"available": model_available, "message": model_message}))
+    page = page.replace("__TAGGER__", _script_json({"available": tagger_available, "message": tagger_message}))
     page = page.replace("__FIELDS__", _script_json(CORRECTION_FIELDS))
+    page = page.replace("__INFO_CSS__", INFO_CSS).replace("__INFO_JS__", info_script(_script_json))
+    page = page.replace("__PIPELINE__", _script_json(PIPELINE))
+    page = page.replace("__COMPONENTS__", _script_json(components(tagger_available)))
+    page = page.replace("__KIND_NAMES__", _script_json(KIND_NAMES))
     return page.encode("utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
     page: bytes = b""
     model_available: bool = False
+    tagger_available: bool = False
     corrections_path: Path = CORRECTIONS_FILE
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
@@ -786,7 +939,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "enquiry is empty or too long"})
                 return
             use_model = bool(data.get("model")) and self.model_available
-            self._json(200, build_response(text, use_model))
+            use_tagger = bool(data.get("tagger")) and self.tagger_available
+            self._json(200, build_response(text, use_model, use_tagger))
         elif self.path == "/extract_batch":
             data = self._read_json(MAX_CHARS * 4 * 2)
             texts = data.get("texts") if data else None
@@ -798,9 +952,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": f"give between 1 and {MAX_BATCH} enquiries, each not too long"})
                 return
             use_model = bool(data.get("model")) and self.model_available
-            self._json(200, {"rows": build_batch(texts, use_model)})
+            use_tagger = bool(data.get("tagger")) and self.tagger_available
+            self._json(200, {"rows": build_batch(texts, use_model, use_tagger)})
         elif self.path == "/save_correction":
-            status, body = handle_save(self._read_json(MAX_CHARS * 8), self.model_available, self.corrections_path)
+            status, body = handle_save(self._read_json(MAX_CHARS * 8), self.model_available, self.corrections_path,
+                                       self.tagger_available)
             self._json(status, body)
         else:
             self._json(404, {"error": "not found"})
@@ -813,6 +969,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Browser demo for the travel enquiry extractor.")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-model", action="store_true", help="do not load the model (rules only)")
+    parser.add_argument("--no-tagger", action="store_true", help="do not load the trained tagger")
     parser.add_argument("--corrections", type=Path, default=CORRECTIONS_FILE,
                         help="file where corrections are saved (default: data/uc2_inquiries/corrections/)")
     args = parser.parse_args(argv)
@@ -823,13 +980,19 @@ def main(argv=None) -> int:
         model_available, model_message = False, "Model switched off (--no-model), so the demo runs rules only."
     else:
         model_available, model_message = check_model()
+    if args.no_tagger:
+        tagger_available, tagger_message = False, "Trained tagger switched off (--no-tagger)."
+    else:
+        tagger_available, tagger_message = check_tagger()
     gold = load_gold_sample()
     Handler.model_available = model_available
+    Handler.tagger_available = tagger_available
     Handler.corrections_path = args.corrections
-    Handler.page = render_page(SAMPLES + [gold], model_available, model_message)
+    Handler.page = render_page(SAMPLES + [gold], model_available, model_message, tagger_available, tagger_message)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Travel Enquiry Extractor demo running at http://localhost:{args.port}")
     print(model_message)
+    print(tagger_message)
     if gold["text"] is None:
         print(f"Note: {GOLD_FILE} not found, so the gold-set sample button is disabled.")
     print("Press Ctrl+C to stop.")
