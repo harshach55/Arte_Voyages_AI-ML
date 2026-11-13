@@ -4,7 +4,7 @@ First version: 30 October 2026. Last updated: 3 November 2026.
 
 ## 1. What was built
 
-The extractor turns a free-text travel enquiry in English, French or German into a validated JSON client profile. It is rule-based. An optional model layer (section 4) can fill some label fields that the rules leave empty.
+The extractor turns a free-text travel enquiry in English, French or German into a validated JSON client profile. It is rule-based. An optional model layer (section 4) can fill some label fields that the rules leave empty, and a trained tagger can fill fields too (see the last section).
 
 - **Schema** (`src/uc2_extractor/schema.py`): one pydantic definition of the profile.
   - Fields: destination, dates or duration, travellers (party size, adults, children, ages), budget (amount, currency, per trip or per person, band), accommodation, flights, interests, dietary needs, occasion, special requests and must-haves, and language.
@@ -33,12 +33,12 @@ The extractor turns a free-text travel enquiry in English, French or German into
   - `GET /health` says whether the model is loaded.
   - Texts are limited to 20,000 characters and bad input gets short errors. Enquiry text is never logged or echoed back.
   - FastAPI's documentation page is at `/docs`.
-- **Tests:** 433 pytest tests, all passing. They cover the schema, date handling, tokenizer offsets, metrics, extractor behaviour, the model layer (including negation), the demo (including that the page never inserts HTML), the API (including bad input and the missing-model fallback) and saving and converting corrections.
+- **Tests:** 578 pytest tests, all passing. They cover the tagger (split, metrics, offsets and filling empty fields), the schema, date handling, tokenizer offsets, metrics, extractor behaviour, the model layer (including negation), the demo (including that the page never inserts HTML), the API (including bad input and the missing-model fallback) and saving and converting corrections.
 
 ## 2. Data and licences
 
 - **Gold set:** 60 synthetic enquiries (20 per language) written for this project. No real customer messages were used. The files are in `data/uc2_inquiries/gold/` and are not committed to git. See `docs/uc2_labelling_guide.md`.
-- **Taskmaster-2:** released under CC BY 4.0 according to its official README. It was **not used** in this first version, because its hotel and flight dialogues do not have labels for most of the fields in our schema. If it is used later, its attribution must be kept.
+- **Taskmaster-2:** released under CC BY 4.0 according to its official README. It was **not used** in the rules-only version, because its hotel and flight dialogues do not have labels for most of the fields in our schema. The trained tagger does use it, together with MASSIVE; see `docs/uc2_datasheet.md`. The attribution is in `NOTICE`.
 - **Budget bands:** under 10k, 10k-25k, 25k-50k and over 50k USD per trip. These are **PLACEHOLDER values**, not agreed business values. They are set in `src/uc2_extractor/budget_bands.toml`. Currencies are never converted, so EUR, GBP, INR and CHF budgets get no band.
 
 ## 3. How to reproduce
@@ -327,4 +327,60 @@ Other known problems:
 **Possible technical next steps (only after the above):**
 - Choose the model threshold on a small separate tuning set (not gold, not held-out), and say so in this note.
 - Add rules for adults implied by groups or families, "already visited" places, and departure cities such as Heathrow.
-- Consider the CRF step only if French or German stay clearly weaker on held-out set 2.
+- The CRF step has been done; see the last section. Its French and German coverage is dates only.
+
+## Trained tagger compared with the rules (held-out set 1)
+
+How to read this: the tagger never saw held-out set 1, but the rules were tuned on it, so the comparison favours the rules. These are not a new real number; the only real number for this set is still the first rules-only run (0.81 / 0.88 / 0.86). Nothing was tuned on this set for this table: c1 and c2 were chosen on the development split of the public data, and the 0.5 confidence floor was fixed in advance.
+
+Set: 45 synthetic enquiries (en 15, fr 15, de 15). Exact match, F1. "Added" means values the tagger put into fields the rules left empty.
+
+All 21 fields pooled:
+
+| Mode | en | fr | de | Field errors |
+|---|---|---|---|---|
+| Rules only | 0.87 | 0.91 | 0.93 | 74 |
+| Rules + tagger | 0.87 | 0.91 | 0.93 | 75 |
+
+Only the fields the tagger can cover in each language:
+
+| Mode | en (10 fields) | fr (dates only) | de (dates only) |
+|---|---|---|---|
+| Rules only | 0.88 | 0.97 | 1.00 |
+| Tagger only | 0.40 | 0.48 | 0.42 |
+| Rules + tagger | 0.87 | 0.97 | 1.00 |
+
+Per field and language. R = rules only, T = tagger only, R+T = rules + tagger, n/c = the tagger does not cover this field in this language:
+
+| Field | en R | en T | en R+T | fr R | fr T | fr R+T | de R | de T | de R+T |
+|---|---|---|---|---|---|---|---|---|---|
+| language | 0.97 | n/c | 0.97 | 1.00 | n/c | 1.00 | 0.93 | n/c | 0.93 |
+| destination | 0.90 | 0.26 | 0.90 | 1.00 | n/c | 1.00 | 0.97 | n/c | 0.97 |
+| start_date | 1.00 | 0.46 | 0.94 | 0.96 | 0.47 | 0.96 | 1.00 | 0.56 | 1.00 |
+| end_date | 1.00 | 0.50 | 0.80 | 1.00 | 0.50 | 1.00 | 1.00 | - | 1.00 |
+| duration | 0.94 | 0.62 | 1.00 | 0.90 | n/c | 0.90 | 0.96 | n/c | 0.96 |
+| dates_ambiguous | 1.00 | - | 1.00 | 1.00 | 0.50 | 1.00 | 1.00 | - | 1.00 |
+| party_size | 0.96 | 0.37 | 0.96 | 0.87 | n/c | 0.87 | 0.96 | n/c | 0.96 |
+| adults | 0.78 | 0.43 | 0.78 | 0.80 | n/c | 0.80 | 0.82 | n/c | 0.82 |
+| children | 0.67 | - | 0.67 | 1.00 | n/c | 1.00 | 0.80 | n/c | 0.80 |
+| ages | 0.57 | n/c | 0.57 | 0.88 | n/c | 0.88 | 0.75 | n/c | 0.75 |
+| budget_min | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 |
+| budget_max | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 |
+| currency | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 |
+| budget_basis | 0.67 | n/c | 0.67 | 0.86 | n/c | 0.86 | 1.00 | n/c | 1.00 |
+| budget_band | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 |
+| accommodation | 0.55 | 0.22 | 0.55 | 0.83 | n/c | 0.83 | 0.80 | n/c | 0.80 |
+| flights | 0.80 | 0.67 | 0.80 | 0.67 | n/c | 0.67 | 0.83 | n/c | 0.83 |
+| interests | 0.57 | n/c | 0.57 | 0.74 | n/c | 0.74 | 0.95 | n/c | 0.95 |
+| dietary | 0.92 | n/c | 0.92 | 1.00 | n/c | 1.00 | 1.00 | n/c | 1.00 |
+| occasion | 0.40 | n/c | 0.40 | 0.50 | n/c | 0.50 | 0.80 | n/c | 0.80 |
+| special_requests | 0.33 | n/c | 0.33 | 0.67 | n/c | 0.67 | 0.67 | n/c | 0.67 |
+
+What the tagger changed compared with rules only:
+
+|  | en | fr | de |
+|---|---|---|---|
+| Correct values added | 1 | 0 | 0 |
+| Wrong values added | 2 | 0 | 0 |
+
+Limits: English has nine labels, French and German only dates. The tagger has no training data for ages, budget, interests, dietary needs, occasion or special requests. All test enquiries are synthetic.

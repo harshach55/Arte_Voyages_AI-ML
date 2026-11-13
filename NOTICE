@@ -1,0 +1,33 @@
+NOTICE
+
+This project uses two public datasets under the Creative Commons Attribution 4.0
+International licence (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+
+The datasets are not stored in this repository. The trained tagger in models/uc2_crf/
+(not stored in this repository either) was trained on the converted data described below.
+
+
+MASSIVE 1.0
+
+Copyright Amazon.com Inc. or its affiliates.
+Licence: CC BY 4.0. The LICENSE file in the release archive is the CC BY 4.0 legal text with
+the copyright line above added at the top.
+MASSIVE is derived from the SLURP dataset.
+Please cite: FitzGerald et al. (arXiv:2204.08582) and Bastianelli et al. (EMNLP 2020).
+
+Changes made for this project: only the en-US, fr-FR and de-DE files were used, and only rows
+from the calendar, transport, recommendation and weather scenarios. Only the date slot was
+kept, as our label DATE, after removing past dates, clock times, stray words and repeats of
+the same value. The place_name, time and timeofday slots were marked as ignored. All other
+annotations were dropped.
+
+
+Taskmaster-2
+
+This is the work of Bill Byrne, Karthik Krishnamoorthi, Saravanan Ganesh, Amit Dubey,
+Kyu-Young Kim and Andy Cedilnik from Google LLC, made available under the Creative Commons
+Attribution 4.0 License. (Wording from the dataset's own README.)
+
+Changes made for this project: only the hotels and flights files were used, and only USER
+turns. Annotations that fit our labels were converted to them. All other annotated text was
+marked as ignored. See docs/uc2_label_scheme.md for the full mapping.
