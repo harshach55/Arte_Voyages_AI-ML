@@ -248,7 +248,7 @@ def test_build_features_rejects_missing_required_input():
 @needs_models
 def test_predict_rate_returns_a_rate_inside_its_range():
     out = P.predict_rate(BOOKING)
-    assert set(out) == {"rate", "low", "high", "currency"}
+    assert set(out) == {"rate", "low", "high", "currency", "range_method"}
     assert out["currency"] == "EUR"
     assert out["low"] <= out["rate"] <= out["high"]
     assert 0 < out["rate"] < 1000

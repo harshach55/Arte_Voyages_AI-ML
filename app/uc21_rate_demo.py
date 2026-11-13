@@ -293,8 +293,15 @@ function showMetrics(m) {
   }
   const cov = m.overall.range_10_90.coverage * 100;
   const parts = hotels.map(h => h + " " + (m.per_hotel[h].range_10_90.coverage * 100).toFixed(1) + "%");
-  document.getElementById("coverage").textContent = "10-90% range: the actual rate was inside it for " +
-    cov.toFixed(1) + "% of test bookings (" + parts.join(", ") + "). A calibrated range would hold about 80%.";
+  let text = "10-90% range from the quantile models alone: the actual rate was inside it for " +
+    cov.toFixed(1) + "% of test bookings (" + parts.join(", ") + "). The target is 80%.";
+  if (m.calibrated) {
+    const c = m.calibrated;
+    const cparts = hotels.map(h => h + " " + (c.per_hotel[h].coverage * 100).toFixed(1) + "%");
+    text += " The range shown above is calibrated (conformal, widened by " + c.q.toFixed(2) + " EUR at each end): " +
+      "it held " + (c.overall.coverage * 100).toFixed(1) + "% (" + cparts.join(", ") + "), still below 80%.";
+  }
+  document.getElementById("coverage").textContent = text;
   const drivers = document.getElementById("drivers");
   m.top_drivers.forEach((d, i) => {
     drivers.appendChild(row([{text: String(i + 1)}, {text: (FEATURE_NAMES[d.feature] || d.feature) + " (" + d.feature + ")"},
@@ -328,12 +335,20 @@ def load_state(model_dir=MODEL_DIR) -> dict:
         m = json.loads(metrics_path.read_text(encoding="utf-8"))
         state["metrics"] = {"test_set": m["test_set"], "overall": m["overall"], "per_hotel": m["per_hotel"],
                             "top_drivers": m["top_drivers"][:8], "scored_on": m["scored_on"]}
+        calibrated = Path(model_dir) / "calibration_metrics.json"
+        if calibrated.exists():  # written once by calibrate.py
+            c = json.loads(calibrated.read_text(encoding="utf-8"))
+            state["metrics"]["calibrated"] = {"overall": c["overall"], "per_hotel": c["per_hotel"], "q": c["q"]}
     return state
 
 
 def info_texts(metrics: dict | None) -> dict:
     range_text = "A range where most similar bookings fell; not a guarantee."
-    if metrics:
+    if metrics and metrics.get("calibrated"):
+        cov = metrics["calibrated"]["overall"]["coverage"] * 100
+        range_text += (" It is calibrated to hold about 80% of late-2016 bookings. On the locked 2017 test set the "
+                       f"actual rate was inside it for {cov:.1f}% of bookings.")
+    elif metrics:
         cov = metrics["overall"]["range_10_90"]["coverage"] * 100
         range_text += f" On the locked 2017 test set the actual rate was inside it for {cov:.1f}% of bookings."
     return {

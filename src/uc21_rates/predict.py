@@ -12,6 +12,8 @@ data (see defaults(); for the current models: market_segment "Online TA", custom
 
 Allowed values and number ranges come from the training data (meta.json, written by train.py),
 so a UI or an API can validate input with allowed_values() and numeric_limits().
+When calibrate.py has been run, the range is the conformally calibrated one (range_method
+"calibrated"); otherwise it comes straight from the two quantile models ("raw").
 The model has no year input: rates are at 2015-2016 price levels, for two Portuguese hotels.
 """
 
@@ -59,6 +61,12 @@ def _load_models(model_dir: str) -> dict:
             raise FileNotFoundError(f"{path} not found. Train first: python -m src.uc21_rates.train")
         models[name] = joblib.load(path)
     models["meta"] = _load_meta(model_dir)
+    calibration = Path(model_dir) / "calibration.json"
+    cal_files = {"q10_cal": "hgb_q10_cal.joblib", "q90_cal": "hgb_q90_cal.joblib"}
+    if calibration.exists() and all((Path(model_dir) / f).exists() for f in cal_files.values()):
+        for name, file in cal_files.items():
+            models[name] = joblib.load(Path(model_dir) / file)
+        models["cal_q"] = float(json.loads(calibration.read_text(encoding="utf-8"))["q"])
     return models
 
 
@@ -146,7 +154,12 @@ def build_features(booking: dict, meta: dict) -> pd.DataFrame:
 
 def _rates(models: dict, X: pd.DataFrame) -> list[dict]:
     rate = models["gradient_boosting"].predict(X)
-    q10, q90 = models["q10"].predict(X), models["q90"].predict(X)
+    if "cal_q" in models:  # conformalized quantile regression, see calibrate.py
+        q10, q90 = models["q10_cal"].predict(X) - models["cal_q"], models["q90_cal"].predict(X) + models["cal_q"]
+        method = "calibrated"
+    else:
+        q10, q90 = models["q10"].predict(X), models["q90"].predict(X)
+        method = "raw"
     out = []
     for r, a, b in zip(rate, q10, q90):
         low, high = min(a, b), max(a, b)
@@ -154,7 +167,7 @@ def _rates(models: dict, X: pd.DataFrame) -> list[dict]:
         # The rate itself is never changed, and the range is not a calibrated interval.
         low, high = min(low, r), max(high, r)
         out.append({"rate": round(float(r), 2), "low": round(float(low), 2), "high": round(float(high), 2),
-                    "currency": "EUR"})
+                    "currency": "EUR", "range_method": method})
     return out
 
 

@@ -200,7 +200,7 @@ channel input adds nothing on this test set.
 - **Data:** European data from two Portuguese hotels (a resort in the Algarve and a city hotel in Lisbon), arrivals July 2015 to August 2017. Not South Asian hotels, and not luxury hotels in particular.
 - **Purpose of this version:** to prove the method and the pipeline (time split, locked test set, baseline, error measures, demo). A real model for Kenexoft needs Kenexoft's own rate data.
 - **adr is an average daily rate** over the whole stay, as recorded by the hotel. It is not a live quote and not a price offer.
-- **The 10-90% range is not a calibrated guarantee.** On the 2017 test set it held 63.5% of actual rates, not 80%.
+- **The 10-90% range is not a guarantee.** The raw range held 63.5% of actual 2017 rates; after conformal calibration it held 71.0%, still below the 80% target (section 10).
 - **Price level:** there is no year input, so predictions are at 2015-2016 price levels.
 - **Room types** are letters only; the paper says codes are used instead of names for anonymity.
 - **Missing inputs** (market segment, customer type, repeat guest, parking, special requests, babies) are filled with the most common training value: Online TA, Transient, 0, 0, 0, 0.
@@ -232,3 +232,32 @@ predict_rate({"hotel": "City Hotel", "arrival_date": "2017-05-12", "nights": 3, 
 ```
 
 Software: Python 3.12.4, scikit-learn 1.9.1, pandas 3.1.0, numpy 2.5.4.
+
+## 10. Calibrated 10-90% range (conformalized quantile regression)
+
+The raw range was too narrow (63.5% instead of 80%), so it was calibrated with conformalized
+quantile regression. All choices were fixed before the 2017 test set was used again:
+
+- Calibration slice: arrivals 2016-09-01 to 2016-12-31 (12,016 rows).
+- The 10% and 90% quantile models were refitted on the rest of 2015-2016 (36,764 rows, arrivals
+  2015-07-01 to 2016-08-31), with the same settings as before.
+- For each calibration booking: E = max(low - actual, actual - high). Q is the ceil((n + 1) x 0.8)-th
+  smallest E. Here Q = 4.38 EUR, so each end of the range moves out by 4.38 EUR.
+- On the calibration slice itself, the raw range held 72.8% and the calibrated range
+  80.0% (80% by construction, so this is not a test).
+- Note: the boosting settings were chosen earlier on this same slice for the point rate (by MAE, not by
+  coverage).
+
+`calibrate.py` allows exactly one scoring of the locked 2017 set for the calibrated range (it checks the
+fingerprint and refuses a second run). It was scored once, on 2026-11-13 at 18:38:30:
+
+| Range on the locked 2017 test set | Coverage | Mean width (EUR) |
+|---|---|---|
+| Raw quantile models (from section 6) | 63.5% | 52.80 |
+| Calibrated, both hotels | 71.0% | 61.04 |
+| Calibrated, City Hotel (15,555 rows) | 67.0% | 58.00 |
+| Calibrated, Resort Hotel (8,945 rows) | 77.9% | 66.32 |
+
+The calibrated range is better but still below 80% on 2017. The method only promises its coverage when new
+bookings behave like the calibration bookings, and 2017 prices were higher than 2016 prices (section 7).
+The demo and the API now show the calibrated range. The point rate and the MAE/MAPE results are unchanged.
