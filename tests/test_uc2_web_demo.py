@@ -216,3 +216,49 @@ def test_saved_correction_recomputes_with_the_tagger(tagger_on, tmp_path):
     assert status == 200
     saved = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert "Zanzibar" in json.dumps(saved)
+
+
+# --- new tagger, model comparison and export --------------------------------------------------------
+
+
+def test_page_offers_the_new_tagger_comparison_and_export():
+    page = demo.render_page(demo.SAMPLES, False, "x", True, "y", True, "New tagger available.").decode("utf-8")
+    assert 'value="tagger2"' in page and "rules + new tagger" in page
+    assert ">Model comparison<" in page and 'id="comparison"' in page
+    for button in ("single-json", "single-csv", "batch-json", "batch-csv"):
+        assert f'id="{button}"' in page
+    assert "createObjectURL" in page and "innerHTML" not in page
+
+
+def test_components_list_both_taggers():
+    names = [c["name"] for c in demo.components(True, True)]
+    assert names[:2] == ["Slot tagger (CRF)", "Slot tagger v2 (CRF, public + synthetic)"]
+    assert demo.components(True, False)[1]["kind"] == "pending"
+
+
+def test_handler_only_uses_a_tagger_that_is_loaded():
+    handler = object.__new__(demo.Handler)
+    handler.tagger_available, handler.tagger2_available = True, False
+    assert handler.tagger_choice("v1") is True and handler.tagger_choice("v2") is False
+    assert handler.tagger_choice(None) is False
+
+
+def test_batch_rows_carry_all_values_for_export():
+    row = demo.build_batch(["Two weeks in Kerala in March"], False)[0]
+    from src.uc2_extractor.metrics import ALL_FIELDS
+
+    assert list(row["values"]) == list(ALL_FIELDS) and row["values"]["destination"] == "Kerala"
+
+
+def test_comparison_is_read_from_the_file_not_typed_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(demo, "MODEL_DIR", tmp_path)
+    assert demo.load_comparison() is None
+    (tmp_path / "comparison_v2.json").write_text('{"x": 1}', encoding="utf-8")
+    assert demo.load_comparison() == {"x": 1}
+
+
+def test_page_script_has_no_raw_line_breaks_inside_strings():
+    page = demo.render_page(demo.SAMPLES, False, "x", True, "y", True, "z").decode("utf-8")
+    script = page.split("<script>", 1)[1]
+    assert "\r" not in script
+    assert 'join("\\r\\n")' in script  # the CSV line break stays an escape in the page

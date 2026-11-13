@@ -7,7 +7,14 @@ keyboard focus and tap. It needs no library and inserts its text with textConten
 INFO = {
     "mode": "Rules only uses hand-written rules. Rules + model adds a small pretrained model that fills gaps, "
             "only when it is very confident (0.88 or more). Rules + tagger adds a tagger we trained on public "
-            "data to fill gaps.",
+            "data to fill gaps. Rules + new tagger uses a tagger also trained on synthetic enquiries, so it knows "
+            "more fields.",
+    "mode_highlight": "This page uses hand-written rules, and a tagger we trained on public data fills gaps the "
+                      "rules leave.",
+    "comparison": "Old tagger: trained on public data only. New tagger: also trained on synthetic enquiries. "
+                  "All these scores are optimistic, because the sets were seen before or come from the same "
+                  "generator as the training data.",
+    "export": "Download the results shown here as a JSON or CSV file, saved on this computer only.",
     "several": "Paste many enquiries, one per line, and get one results table.",
     "source": "The exact words the value was taken from, so a person can check it.",
     "tag_rule": "Found by hand-written rules.",

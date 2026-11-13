@@ -125,7 +125,7 @@ __INFO_CSS__
     <button class="primary" id="extract">Extract</button>
     <span id="samples" class="buttons" style="margin:0"></span>
   </div>
-  <p class="small"><span id="status"></span><span data-info-slot="mode"></span></p>
+  <p class="small"><span id="status"></span><span data-info-slot="mode_highlight"></span></p>
   <ul id="legend" class="legend"></ul>
   <div id="result" hidden>
     <h2>Enquiry<span data-info-slot="highlight"></span></h2>

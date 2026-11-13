@@ -32,13 +32,15 @@ def test_every_icon_has_wording():
 
 
 def test_main_page_has_its_icons():
-    assert {"mode", "several", "source", "tag_rule", "tag_model", "tag_crf", "flags", "save", "pipeline"} == slots(PAGE_8000)
+    assert {"mode", "several", "source", "tag_rule", "tag_model", "tag_crf", "flags", "save", "pipeline",
+            "comparison", "export"} == slots(PAGE_8000)
     for key in ("real_number", "optimistic", "unclear_dates", "budget_band", "language"):
         assert f'"{key}"' in PAGE_8000
 
 
 def test_highlight_page_has_only_what_exists_there():
-    assert {"mode", "tag_rule", "tag_crf", "highlight"} == slots(PAGE_8002)
+    assert {"mode_highlight", "tag_rule", "tag_crf", "highlight"} == slots(PAGE_8002)
+    assert "rules + model" not in info.INFO["mode_highlight"].lower()
 
 
 def test_both_pages_carry_the_same_wording():
